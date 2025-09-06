@@ -1,7 +1,8 @@
-current: stage-1@0.1
-stage-1@0.1:
-    width: 11
-    height: 11
+current: stage-0@0.1
+stage-0@0.1:
+    width: 19
+    height: 19
     generator: arena
     emit_signals: false
+    vis_radius: 100
     gem_spawn: [0.04, 0.06]

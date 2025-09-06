@@ -45,11 +45,9 @@ module FOVAngle
     # Public: compute visible cells within radius (Euclidean).
     # grid[y][x]; origin (ox,oy); pass a block { |x,y| opaque? }
     # Returns a Set of [x,y].
-    def visible(grid, ox, oy, radius:)
+    def visible(w, h, grid, ox, oy, radius:)
         raise ArgumentError, "need an opaque? block" unless block_given?
 
-        h = grid.length
-        w = grid[0].length
         return Set.new unless ox.between?(0, w-1) && oy.between?(0, h-1)
 
         r2 = radius * radius
@@ -274,9 +272,10 @@ class Runner
         command = "node include/maze.js --width #{@width} --height #{@height} --generator #{@generator} --seed #{@seed} --wall \"#\" --floor \".\""
         maze = `#{command}`.strip.split("\n").map { |x| x.strip }.select do |line|
             line =~ /^[\.#]+$/
-        end.map do |line|
-            row = line.split('').map { |x| x == '#' }
-        end
+        end.map.with_index do |line, y|
+            row = line.split('').map.with_index { |e, x| e == '#' ? (y << 16) | x : nil }
+        end.flatten.reject { |x| x.nil? }
+        Set.new(maze)
     end
 
     def mix_rgb_hex(c1, c2, t)
@@ -305,23 +304,22 @@ class Runner
             paint_rng = PCG32.new(1234)
 
             bots_visible = @bots.map do |bot|
-                pos = bot[:position]
-                @visibility["#{pos[0]}/#{pos[1]}"] || []
+                @visibility[(bot[:position][1] << 16) | bot[:position][0]]
             end
 
-            @maze.each.with_index do |row, y|
-                row.each.with_index do |cell, x|
+            (0...@height).each do |y|
+                (0...@width).each do |x|
                     c = ' ' * tile_width
                     bg = FLOOR_COLOR
                     fg = WALL_COLOR
-                    if cell
+                    if @maze.include?((y << 16) | x)
                         c = '█' * tile_width
                         fg = mix_rgb_hex(WALL_COLOR, '#000000', paint_rng.next_float() * 0.25)
                     end
                     @bots.each.with_index do |bot, i|
                         p = bot[:position]
                         if p[0] == x && p[1] == y
-                            c = '🤔'
+                            c = @bots[i][:emoji]
                             while Unicode::DisplayWidth.of(c) < tile_width
                                 c += ' '
                             end
@@ -340,7 +338,7 @@ class Runner
                             end
                         end
                     end
-                    unless @tiles_revealed.include?("#{x}/#{y}")
+                    unless @tiles_revealed.include?((y << 16) | x)
                         fg = mix_rgb_hex(fg, '#000000', 0.5)
                         bg = mix_rgb_hex(bg, '#000000', 0.5)
                     end
@@ -354,13 +352,14 @@ class Runner
 
     def setup
         @rng = PCG32.new(@seed)
-        @maze = gen_maze
+        @maze = gen_maze()
         @floor_tiles = []
         @checksum = Digest::SHA256.hexdigest(@maze.to_json)
-        @maze.each.with_index do |row, y|
-            row.each.with_index do |cell, x|
-                unless cell
-                    @floor_tiles << [x, y]
+        (0...@height).each do |y|
+            (0...@width).each do |x|
+                offset = (y << 16) | x
+                unless @maze.include?(offset)
+                    @floor_tiles << offset
                 end
             end
         end
@@ -369,39 +368,55 @@ class Runner
         @spawn_points = []
         @spawn_points << @floor_tiles.shift
         @spawn_points << @floor_tiles.shift
+        @spawn_points.map! do |offset|
+            [offset & 0xFFFF, offset >> 16]
+        end
         if @swap_bots
             @spawn_points.reverse!
         end
         @message_queue = Queue.new
 
-        visibility_path = "cache/#{@checksum}.json.gz"
+        visibility_path = "cache/#{@checksum}.yaml.gz"
         if @cache && File.exist?(visibility_path)
             Zlib::GzipReader.open(visibility_path) do |gz|
-                @visibility = JSON.parse(gz.read)
+                @visibility = YAML.load(gz.read, permitted_classes: [Set])
             end
         else
             # pre-calculate visibility from each tile
             @visibility = {}
             (0...@height).each do |y|
                 (0...@width).each do |x|
-                    next if @maze[y][x]
-                    visible = FOVAngle.visible(@maze, x, y, radius: @vis_radius) { |x, y| @maze[y][x] }
-                    @visibility["#{x}/#{y}"] = visible.to_a.map { |x| "#{x[0]}/#{x[1]}" }
+                    offset = (y << 16) | x
+                    v = Set.new()
+                    unless @maze.include?(offset)
+                        visible = FOVAngle.visible(@width, @height, @maze, x, y, radius: @vis_radius) { |x, y| @maze.include?((y << 16) | x) }
+                        v = visible.to_a.map do |p|
+                            (p[1] << 16) | p[0]
+                        end.sort
+                    end
+                    @visibility[offset] = Set.new(v)
                 end
             end
             if @cache
                 FileUtils.mkpath(File.dirname(visibility_path))
                 Zlib::GzipWriter.open(visibility_path) do |gz|
-                    gz.write @visibility.to_json
+                    gz.write @visibility.to_yaml
                 end
             end
         end
 
         @tiles_revealed = Set.new()
+        @tiles_reported = Set.new()
     end
 
     def add_bot(path)
-        @bots << {:position => @spawn_points.shift, :score => 0}
+        @bots << {:position => @spawn_points.shift, :score => 0, :name => "Botty McBotface", :emoji => '🤖'}
+        yaml_path = File.join(File.expand_path(path), 'bot.yaml')
+        if File.exist?(yaml_path)
+            info = YAML.load(File.read(yaml_path))
+            @bots.last[:name] = info['name'] if info['name'].is_a?(String)
+            @bots.last[:emoji] = info['emoji'] if info['emoji'].is_a?(String)
+        end
         bot_index = @bots_io.size
         @bots_io << start_bot(path) do |line|
             if @verbose >= 2
@@ -412,30 +427,24 @@ class Runner
     end
 
     def add_gem()
-        floor_tiles = Set.new()
-        @maze.each.with_index do |row, y|
-            row.each.with_index do |cell, x|
-                unless cell
-                    floor_tiles << [x, y]
-                end
-            end
-        end
+        candidate_tiles = @floor_tiles_set.dup
         # don't spawn gem near bot
         @bots.each do |bot|
-            floor_tiles.delete([bot[:position][0], bot[:position][1]])
+            candidate_tiles.delete((bot[:position][1] << 16) | bot[:position][0])
         end
         # don't spawn gem on another gem
         @gems.each do |gem|
-            floor_tiles.delete([gem[:position][0], gem[:position][1]])
+            candidate_tiles.delete((gem[:position][1] << 16) | gem[:position][0])
         end
-        return 0 if floor_tiles.empty?
-        gem = {:position => @rng.sample(floor_tiles.to_a), :ttl => @gem_ttl}
+        return 0 if candidate_tiles.empty?
+        gem = {:position_offset => @rng.sample(candidate_tiles.to_a), :ttl => @gem_ttl}
+        gem[:position] = [gem[:position_offset] & 0xFFFF, gem[:position_offset] >> 16]
 
         # pre-calculate gem level
         level = {}
         wavefront = Set.new()
         wavefront << [gem[:position][0], gem[:position][1]]
-        level["#{gem[:position][0]}/#{gem[:position][1]}"] = 1.0
+        level[(gem[:position][1] << 16) | gem[:position][0]] = 1.0
         distance = 0
         while !wavefront.empty?
             new_wavefront = Set.new()
@@ -446,13 +455,14 @@ class Runner
                     dx = px + d[0]
                     dy = py + d[1]
                     if dx >= 0 && dy >= 0 && dx < @width && dy < @height
-                        if level["#{dx}/#{dy}"].nil? && !@maze[dy][dx]
+                        offset = (dy << 16) | dx
+                        if !level.include?(offset) && !@maze.include?(offset)
                             l = Math.exp(-distance / @signal_radius)
                             if @signal_quantization > 0
                                 l = ((l * @signal_quantization).to_i).to_f / @signal_quantization
                             end
                             l = 0.0 if l < @signal_cutoff
-                            level["#{dx}/#{dy}"] = l
+                            level[offset] = l
                             new_wavefront << [dx, dy]
                         end
                     end
@@ -494,7 +504,7 @@ class Runner
                         @protocol.last[:messages] << temp
                     end
                 end
-                # STEP 5: Advance tick
+                # STEP 0: Advance tick
                 @tick += 1
                 break if @tick >= @max_ticks
 
@@ -536,14 +546,16 @@ class Runner
                 end
 
                 bot_position = @bots[0][:position]
-                (@visibility["#{bot_position[0]}/#{bot_position[1]}"] || []).each do |t|
+                @visibility[(bot_position[1] << 16) | bot_position[0]].each do |t|
                     @tiles_revealed << t
                 end
 
                 # STEP 2: RENDER
-                screen = render(signal_level) if @verbose >= 2
-                @protocol.last[:screen] = screen
-                print screen
+                if @verbose >= 2
+                    screen = render(signal_level)
+                    @protocol.last[:screen] = screen
+                    print screen
+                end
                 t1 = Time.now.to_f
                 @tps = (@tick.to_f / (t1 - t0)).round
                 if @verbose == 1
@@ -553,8 +565,10 @@ class Runner
                 bot_with_initiative = ((@tick + (@swap_bots ? 1 : 0)) % @bots.size)
 
                 # STEP 3: QUERY BOTS: send data, get response, move but don't collect
+
                 @bots.each.with_index do |bot, i|
                     bot_position = bot[:position]
+
                     data = {}
                     if @tick == 0
                         data[:config] = {}
@@ -572,25 +586,28 @@ class Runner
                     data[:floor] = []
                     data[:initiative] = (bot_with_initiative == i)
                     data[:visible_gems] = []
-                    (@visibility["#{bot_position[0]}/#{bot_position[1]}"] || []).each do |t|
-                        _ = t.split('/').map { |x| x.to_i }
-                        tx = _[0]
-                        ty = _[1]
-                        key = @maze[ty][tx] ? :wall : :floor
-                        data[key] << _
+
+                    new_reported_tiles = Set.new()
+                    this_round = (@visibility[(bot_position[1] << 16) | bot_position[0]] - @tiles_reported)
+                    this_round.each do |t|
+                        key = @maze.include?(t) ? :wall : :floor
+                        data[key] << [t & 0xFFFF, t >> 16]
+                        new_reported_tiles << t
                         @gems.each do |gem|
-                            if gem[:position] == _
-                                data[:visible_gems] << {:position => _, :ttl => gem[:ttl]}
+                            if gem[:position_offset] == t
+                                data[:visible_gems] << {:position => gem[:position], :ttl => gem[:ttl]}
                             end
                         end
                     end
+                    @tiles_reported |= new_reported_tiles
                     if @emit_signals
                         level_sum = 0.0
                         @gems.each.with_index do |gem, i|
-                            level_sum += signal_level[i]["#{bot_position[0]}/#{bot_position[1]}"] || 0.0
+                            level_sum += signal_level[i][(bot_position[1] << 16) | bot_position[0]] || 0.0
                         end
                         data[:signal_level] = format("%.6f", level_sum).to_f
                     end
+
                     @bots_io[i].stdin.puts(data.to_json)
                     @protocol.last[:bots] ||= {}
                     @protocol.last[:bots][:data] = data
@@ -602,7 +619,7 @@ class Runner
                         dx = bot_position[0] + dir[command][0]
                         dy = bot_position[1] + dir[command][1]
                         if dx >= 0 && dy >= 0 && dx < @width && dy < @height
-                            unless (@maze[dy][dx])
+                            unless @maze.include?((dy << 16) | dx)
                                 @bots[i][:position] = [dx, dy]
                             end
                         end
@@ -611,6 +628,7 @@ class Runner
                         # invalid command!
                     end
                 end
+
                 if @verbose >= 2 && @max_tps > 0
                     loop do
                         tf1 = Time.now.to_f
@@ -673,8 +691,7 @@ class Runner
         result = {}
         result[:score] = @bots.first[:score]
         if @profile
-            temp = @floor_tiles_set.map { |x| x.map { |y| y.to_s }.join('/') }
-            result[:tile_coverage] = ((@tiles_revealed & temp).size.to_f / temp.size.to_f * 100.0 * 100).to_i.to_f / 100
+            result[:tile_coverage] = ((@tiles_revealed & @floor_tiles_set).size.to_f / @floor_tiles_set.size.to_f * 100.0 * 100).to_i.to_f / 100
             result[:ticks_to_first_capture] = first_capture
             if spawned_ttl > 0
                 result[:gem_utilization] = (@bots.first[:score].to_f / spawned_ttl * 100.0 * 100).to_i.to_f / 100
@@ -686,14 +703,15 @@ class Runner
 end
 
 stages = YAML.load(File.read('stages.yaml'))
+
 options = {
-    stage: nil,
+    stage: 'current',
     width: 19,
     height: 19,
     generator: 'arena',
     seed: rand(2 ** 32),
     max_ticks: 1000,
-    vis_radius: 100,
+    vis_radius: 10,
     max_gems: 1,
     gem_spawn_rate: 0.05,
     gem_ttl: 300,
@@ -710,11 +728,12 @@ options = {
     emit_signals: false,
     profile: false,
 }
+
 GENERATORS = %w(arena divided eller icey cellular uniform digger rogue)
 OptionParser.new do |opts|
     opts.banner = "Usage: ./runner.rb [options]"
 
-    opts.on('-sSTAGE', '--stage STAGE', stages.keys.reject { |x| x == 'current' },
+    opts.on('-sSTAGE', '--stage STAGE', stages.keys,
         "Stage (default: none)") do |x|
         options[:stage] = x
     end
@@ -798,6 +817,7 @@ end
 
 # Apply stage if given
 unless options[:stage].nil?
+    options[:stage] = stages['current'] if options[:stage] == 'current'
     stage = stages[options[:stage]]
     stage.each_pair do |_key, value|
         key = _key.to_sym
@@ -806,6 +826,8 @@ unless options[:stage].nil?
         elsif value.is_a? Float
             options[key] = value
         elsif value.is_a? String
+            options[key] = value
+        elsif value == true || value == false
             options[key] = value
         end
     end
