@@ -421,7 +421,7 @@ class Runner
         @bots_io << start_bot(path) do |line|
             if @verbose >= 2
                 @message_queue << {:bot => bot_index, :line => line}
-                STDERR.puts "Bot says: #{line}"
+                STDERR.puts " #{@bots[bot_index][:emoji]}  #{line}"
             end
         end
     end
