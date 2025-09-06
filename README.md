@@ -1,1 +1,1 @@
-Zur Wettbewerbsseite: [https://hiddengems.gymnasiumsteglitz.de/])(https://hiddengems.gymnasiumsteglitz.de/)
+Zur Wettbewerbsseite: [https://hiddengems.gymnasiumsteglitz.de/](https://hiddengems.gymnasiumsteglitz.de/)
