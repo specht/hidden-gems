@@ -221,32 +221,32 @@ class Runner
 
     attr_accessor :round
 
-    def initialize(width:, height:, generator:, seed:, vis_radius:,
-                   gem_spawn:, gem_radius:, gem_quantization:,
-                   gem_noise:,gem_cutoff:, gem_ttl:, gem_fade:,
-                   max_gems:, max_ticks:, swap_bots:, verbose:, max_tps:,
-                   cache:, rounds:, emit_signals:, profile:
+    def initialize(seed:, width:, height:, generator:, max_ticks:,
+                   vis_radius:, gem_spawn_rate:, gem_ttl:, max_gems:,
+                   emit_signals:, signal_radius:, signal_quantization:,
+                   signal_noise:, signal_cutoff:, signal_fade:, swap_bots:,
+                   verbose:, max_tps:, cache:, rounds:, profile:
                    )
+        @seed = seed
         @width = width
         @height = height
         @generator = generator
-        @seed = seed
-        @vis_radius = vis_radius
-        @gem_spawn = gem_spawn
-        @gem_radius = gem_radius
-        @gem_quantization = gem_quantization
-        @gem_noise = gem_noise
-        @gem_cutoff = gem_cutoff
-        @gem_ttl = gem_ttl
-        @gem_fade = gem_fade
-        @max_gems = max_gems
         @max_ticks = max_ticks
+        @vis_radius = vis_radius
+        @gem_spawn_rate = gem_spawn_rate
+        @gem_ttl = gem_ttl
+        @max_gems = max_gems
+        @emit_signals = emit_signals
+        @signal_radius = signal_radius
+        @signal_quantization = signal_quantization
+        @signal_noise = signal_noise
+        @signal_cutoff = signal_cutoff
+        @signal_fade = signal_fade
         @swap_bots = swap_bots
         @verbose = verbose
         @max_tps = max_tps
         @cache = cache
         @rounds = rounds
-        @emit_signals = @emit_signals
         @profile = profile
         @bots = []
         @bots_io = []
@@ -290,7 +290,7 @@ class Runner
         format("#%02X%02X%02X", r, g, b)
     end
 
-    def render(gem_level)
+    def render(signal_level)
         StringIO.open do |io|
             terminal_height, terminal_width = $stdout.winsize
             tile_width = 3
@@ -334,8 +334,10 @@ class Runner
                                 c += ' '
                             end
                         end
-                        if gem_level[i].include?("#{x}/#{y}")
-                            bg = mix_rgb_hex(GEM_COLOR, bg, 1.0 - gem_level[i]["#{x}/#{y}"])
+                        if @emit_signals
+                            if signal_level[i].include?("#{x}/#{y}")
+                                bg = mix_rgb_hex(GEM_COLOR, bg, 1.0 - signal_level[i]["#{x}/#{y}"])
+                            end
                         end
                     end
                     unless @tiles_revealed.include?("#{x}/#{y}")
@@ -445,11 +447,11 @@ class Runner
                     dy = py + d[1]
                     if dx >= 0 && dy >= 0 && dx < @width && dy < @height
                         if level["#{dx}/#{dy}"].nil? && !@maze[dy][dx]
-                            l = Math.exp(-distance / @gem_radius)
-                            if @gem_quantization > 0
-                                l = ((l * @gem_quantization).to_i).to_f / @gem_quantization
+                            l = Math.exp(-distance / @signal_radius)
+                            if @signal_quantization > 0
+                                l = ((l * @signal_quantization).to_i).to_f / @signal_quantization
                             end
-                            l = 0.0 if l < @gem_cutoff
+                            l = 0.0 if l < @signal_cutoff
                             level["#{dx}/#{dy}"] = l
                             new_wavefront << [dx, dy]
                         end
@@ -502,33 +504,35 @@ class Runner
                 # @protocol.last[:gems] = @gems
                 tf0 = Time.now.to_f
 
-                # STEP 1: Calculate gem levels at each tile
-                gem_level = @gems.map do |gem|
-                    temp = if @gem_noise > 0.0
-                        gem[:level].transform_values do |l|
-                            l += (@rng.next_float() - 0.5) * 2.0 * @gem_noise
-                            l = 0.0 if l < 0.0
-                            l = 1.0 if l > 1.0
-                            l
+                # STEP 1: Calculate signal levels at each tile
+                if @emit_signals
+                    signal_level = @gems.map do |gem|
+                        temp = if @signal_noise > 0.0
+                            gem[:level].transform_values do |l|
+                                l += (@rng.next_float() - 0.5) * 2.0 * @signal_noise
+                                l = 0.0 if l < 0.0
+                                l = 1.0 if l > 1.0
+                                l
+                            end
+                        else
+                            gem[:level]
                         end
-                    else
-                        gem[:level]
+                        if @signal_fade > 0
+                            t = 1.0
+                            gem_age = @gem_ttl - gem[:ttl]
+                            if gem_age < @signal_fade
+                                t = (gem_age + 1).to_f / @signal_fade
+                            elsif gem_age >= @gem_ttl - @signal_fade
+                                t = (@gem_ttl - gem_age).to_f / @signal_fade
+                            end
+                            t = 0.0 if t < 0.0
+                            t = 1.0 if t > 1.0
+                            if t < 1.0
+                                temp = temp.transform_values { |x| x * t }
+                            end
+                        end
+                        temp
                     end
-                    if @gem_fade > 0
-                        t = 1.0
-                        gem_age = @gem_ttl - gem[:ttl]
-                        if gem_age < @gem_fade
-                            t = (gem_age + 1).to_f / @gem_fade
-                        elsif gem_age >= @gem_ttl - @gem_fade
-                            t = (@gem_ttl - gem_age).to_f / @gem_fade
-                        end
-                        t = 0.0 if t < 0.0
-                        t = 1.0 if t > 1.0
-                        if t < 1.0
-                            temp = temp.transform_values { |x| x * t }
-                        end
-                    end
-                    temp
                 end
 
                 bot_position = @bots[0][:position]
@@ -537,7 +541,7 @@ class Runner
                 end
 
                 # STEP 2: RENDER
-                screen = render(gem_level) if @verbose >= 2
+                screen = render(signal_level) if @verbose >= 2
                 @protocol.last[:screen] = screen
                 print screen
                 t1 = Time.now.to_f
@@ -555,8 +559,8 @@ class Runner
                     if @tick == 0
                         data[:config] = {}
                         %w(width height generator max_ticks vis_radius max_gems
-                        gem_spawn gem_ttl gem_radius gem_cutoff gem_noise
-                        gem_quantization gem_fade).each do |key|
+                        gem_spawn_rate gem_ttl signal_radius signal_cutoff signal_noise
+                        signal_quantization signal_fade).each do |key|
                             data[:config][key.to_sym] = instance_variable_get("@#{key}")
                         end
                         bot_seed = Digest::SHA256.digest("#{@seed}/bot").unpack1('L<')
@@ -580,13 +584,13 @@ class Runner
                             end
                         end
                     end
-                    level_sum = 0.0
-                    @gems.each.with_index do |gem, i|
-                        level_sum += gem_level[i]["#{bot_position[0]}/#{bot_position[1]}"] || 0.0
+                    if @emit_signals
+                        level_sum = 0.0
+                        @gems.each.with_index do |gem, i|
+                            level_sum += signal_level[i]["#{bot_position[0]}/#{bot_position[1]}"] || 0.0
+                        end
+                        data[:signal_level] = format("%.6f", level_sum).to_f
                     end
-                    # level_sum = 1.0 if level_sum > 1.0
-                    data[:gem_level] = format("%.6f", level_sum).to_f
-                    # STDERR.puts data.to_json
                     @bots_io[i].stdin.puts(data.to_json)
                     @protocol.last[:bots] ||= {}
                     @protocol.last[:bots][:data] = data
@@ -638,7 +642,7 @@ class Runner
                     gem[:ttl] <= 0
                 end
 
-                if @rng.next_float() < @gem_spawn && @gems.size < @max_gems
+                if @rng.next_float() < @gem_spawn_rate && @gems.size < @max_gems
                     spawned_ttl += add_gem()
                 end
                 STDIN.raw do |stdin|
@@ -686,24 +690,24 @@ options = {
     stage: nil,
     width: 19,
     height: 19,
-    generator: 'cellular',
+    generator: 'arena',
     seed: rand(2 ** 32),
     max_ticks: 1000,
-    vis_radius: 5,
+    vis_radius: 100,
     max_gems: 1,
-    gem_spawn: 0.05,
+    gem_spawn_rate: 0.05,
     gem_ttl: 300,
-    gem_radius: 10.0,
-    gem_cutoff: 0.0,
-    gem_noise: 0.0,
-    gem_quantization: 0,
-    gem_fade: 0,
+    signal_radius: 10.0,
+    signal_cutoff: 0.0,
+    signal_noise: 0.0,
+    signal_quantization: 0,
+    signal_fade: 0,
     swap_bots: false,
     verbose: 2,
     max_tps: 15,
     cache: false,
     rounds: 1,
-    emit_signals: true,
+    emit_signals: false,
     profile: false,
 }
 GENERATORS = %w(arena divided eller icey cellular uniform digger rogue)
@@ -713,6 +717,9 @@ OptionParser.new do |opts|
     opts.on('-sSTAGE', '--stage STAGE', stages.keys.reject { |x| x == 'current' },
         "Stage (default: none)") do |x|
         options[:stage] = x
+    end
+    opts.on("-sSEED", "--seed SEED", String, "Seed (default: random)") do |x|
+        options[:seed] = x.to_i(36)
     end
     opts.on("-wWIDTH", "--width WIDTH", Integer, "Arena width (default: #{options[:width]})") do |x|
         options[:width] = x
@@ -724,38 +731,38 @@ OptionParser.new do |opts|
         "Arena generator (default: #{options[:generator]})") do |x|
         options[:generator] = x
     end
-    opts.on("-sSEED", "--seed SEED", String, "Seed (default: random)") do |x|
-        options[:seed] = x.to_i(36)
-    end
     opts.on("-tTICKS", "--ticks TICKS", Integer, "Number of ticks (default: #{options[:ticks]})") do |x|
         options[:max_ticks] = x
     end
     opts.on("--vis-radius RADIUS", Integer, "Visibility radius (default: #{options[:vis_radius]})") do |x|
         options[:vis_radius] = x
     end
-    opts.on("--max-gems GEMS", Integer, "Max. number of gems (default: #{options[:max_gems]})") do |x|
-        options[:max_gems] = x
-    end
-    opts.on("--gem-spawn N", Float, "Gem spawn probability (default: #{options[:gem_spawn]})") do |x|
-        options[:gem_spawn] = x
+    opts.on("--gem-spawn N", Float, "Gem spawn probability (default: #{options[:gem_spawn_rate]})") do |x|
+        options[:gem_spawn_rate] = x
     end
     opts.on("--gem-ttl TTL", Integer, "Gem TTL (default: #{options[:gem_ttl]})") do |x|
         options[:gem_ttl] = x
     end
-    opts.on("--gem-radius N", Float, "Gem signal radius (default: #{options[:gem_radius]})") do |x|
-        options[:gem_radius] = x
+    opts.on("--max-gems GEMS", Integer, "Max. number of gems (default: #{options[:max_gems]})") do |x|
+        options[:max_gems] = x
     end
-    opts.on("--gem-cutoff N", Float, "Gem signal cutoff (default: #{options[:gem_cutoff]})") do |x|
-        options[:gem_cutoff] = x
+    opts.on("-e", "--[no-]emit-signals", "Enable gem signals (default: #{options[:emit_signals]})") do |x|
+        options[:emit_signals] = x
     end
-    opts.on("--gem-noise N", Float, "Gem signal noise (default: #{options[:gem_noise]})") do |x|
-        options[:gem_noise] = x
+    opts.on("--signal-radius N", Float, "Gem signal radius (default: #{options[:signal_radius]})") do |x|
+        options[:signal_radius] = x
     end
-    opts.on("--gem-quantization N", Integer, "Gem signal quantization (default: #{options[:gem_quantization]})") do |x|
-        options[:gem_quantization] = x
+    opts.on("--signal-quantization N", Integer, "Gem signal quantization (default: #{options[:signal_quantization]})") do |x|
+        options[:signal_quantization] = x
     end
-    opts.on("--gem-fade N", Integer, "Gem signal fade (default: #{options[:gem_fade]})") do |x|
-        options[:gem_fade] = x
+    opts.on("--signal-noise N", Float, "Gem signal noise (default: #{options[:signal_noise]})") do |x|
+        options[:signal_noise] = x
+    end
+    opts.on("--signal-cutoff N", Float, "Gem signal cutoff (default: #{options[:signal_cutoff]})") do |x|
+        options[:signal_cutoff] = x
+    end
+    opts.on("--signal-fade N", Integer, "Gem signal fade (default: #{options[:signal_fade]})") do |x|
+        options[:signal_fade] = x
     end
     opts.on("--[no-]swap-bots", "Swap starting positions (default: #{options[:swap_bots]})") do |x|
         options[:swap_bots] = x
