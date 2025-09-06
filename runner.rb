@@ -18,15 +18,6 @@ require 'unicode/display_width'
 require 'yaml'
 require 'zlib'
 
-TERMINAL_HEIGHT, TERMINAL_WIDTH = $stdout.winsize
-
-# Signal.trap("WINCH") do
-#     Object.send(:remove_const, :TERMINAL_WIDTH)
-#     Object.send(:remove_const, :TERMINAL_HEIGHT)
-#     TERMINAL_HEIGHT, TERMINAL_WIDTH = $stdout.winsize
-#     print "\033[2J\033[H"
-# end
-
 def median(array)
     return nil if array.empty?
     sorted = array.sort
@@ -264,20 +255,16 @@ class Runner
 
     def start_bot(_path, &block)
         path = File.join(File.expand_path(_path), 'start.sh')
-        STDERR.puts path
         stdin, stdout, stderr, wait_thr = Open3.popen3(path, chdir: File.dirname(path))
         stdin.sync = true
         stdout.sync = true
         stderr.sync = true
         err_thread = Thread.new do
             begin
-                # Use each_line if the bot writes newline-terminated diagnostics.
                 stderr.each_line do |line|
-                    # Print or route to your logger/GUI/queue as you like:
                     yield line if block_given?
                 end
             rescue IOError
-                # Stream closed; exit thread
             end
         end
         Bot.new(stdin, stdout, stderr, wait_thr)
@@ -304,56 +291,63 @@ class Runner
     end
 
     def render(beacon_level)
-        print "\033[H" if @verbose >= 2
+        StringIO.open do |io|
+            terminal_height, terminal_width = $stdout.winsize
+            tile_width = 3
 
-        status_line = sprintf("  Seed: #{@seed.to_s(36)}  │  Tick: %#{(@max_ticks - 1).to_s.size}d  │  %d tps  │  Score: #{@bots[0][:score]}", @tick, @tps)
-        status_line = status_line + ' ' * (TERMINAL_WIDTH - status_line.size)
+            io.print "\033[H" if @verbose >= 2
 
-        puts Paint[status_line, UI_FOREGROUND, UI_BACKGROUND]
+            status_line = sprintf("  Seed: #{@seed.to_s(36)}  │  Tick: %#{(@max_ticks - 1).to_s.size}d  │  %d tps  │  Score: #{@bots[0][:score]}", @tick, @tps)
+            status_line = status_line + ' ' * (terminal_width - status_line.size)
 
-        paint_rng = PCG32.new(1234)
+            io.puts Paint[status_line, UI_FOREGROUND, UI_BACKGROUND]
 
-        bots_visible = @bots.map do |bot|
-            pos = bot[:position]
-            @visibility["#{pos[0]}/#{pos[1]}"] || []
-        end
+            paint_rng = PCG32.new(1234)
 
-        @maze.each.with_index do |row, y|
-            # next
-            row.each.with_index do |cell, x|
-                c = '   '
-                bg = FLOOR_COLOR
-                fg = WALL_COLOR
-                if cell
-                    c = '███'
-                    # c = '##'
-                    fg = mix_rgb_hex(WALL_COLOR, '#000000', paint_rng.next_float() * 0.25)
-                end
-                @bots.each.with_index do |bot, i|
-                    p = bot[:position]
-                    if p[0] == x && p[1] == y
-                        c = '🤔 '
-                    end
-                end
-                @beacons.each.with_index do |p, i|
-                    if p[:position][0] == x && p[:position][1] == y
-                        c = @beacon_icon
-                        while Unicode::DisplayWidth.of(c) < 3
-                            c += ' '
-                        end
-                        fg = BEACON_COLOR
-                    end
-                    if beacon_level[i].include?("#{x}/#{y}")
-                        bg = mix_rgb_hex(BEACON_COLOR, bg, 1.0 - beacon_level[i]["#{x}/#{y}"])
-                    end
-                end
-                unless @tiles_revealed.include?("#{x}/#{y}")
-                    fg = mix_rgb_hex(fg, '#000000', 0.5)
-                    bg = mix_rgb_hex(bg, '#000000', 0.5)
-                end
-                print Paint[c, fg, bg]
+            bots_visible = @bots.map do |bot|
+                pos = bot[:position]
+                @visibility["#{pos[0]}/#{pos[1]}"] || []
             end
-            puts
+
+            @maze.each.with_index do |row, y|
+                row.each.with_index do |cell, x|
+                    c = ' ' * tile_width
+                    bg = FLOOR_COLOR
+                    fg = WALL_COLOR
+                    if cell
+                        c = '█' * tile_width
+                        fg = mix_rgb_hex(WALL_COLOR, '#000000', paint_rng.next_float() * 0.25)
+                    end
+                    @bots.each.with_index do |bot, i|
+                        p = bot[:position]
+                        if p[0] == x && p[1] == y
+                            c = '🤔'
+                            while Unicode::DisplayWidth.of(c) < tile_width
+                                c += ' '
+                            end
+                        end
+                    end
+                    @beacons.each.with_index do |p, i|
+                        if p[:position][0] == x && p[:position][1] == y
+                            c = @beacon_icon
+                            while Unicode::DisplayWidth.of(c) < tile_width
+                                c += ' '
+                            end
+                            fg = BEACON_COLOR
+                        end
+                        if beacon_level[i].include?("#{x}/#{y}")
+                            bg = mix_rgb_hex(BEACON_COLOR, bg, 1.0 - beacon_level[i]["#{x}/#{y}"])
+                        end
+                    end
+                    unless @tiles_revealed.include?("#{x}/#{y}")
+                        fg = mix_rgb_hex(fg, '#000000', 0.5)
+                        bg = mix_rgb_hex(bg, '#000000', 0.5)
+                    end
+                    io.print Paint[c, fg, bg]
+                end
+                io.puts
+            end
+            io.string
         end
     end
 
@@ -377,6 +371,7 @@ class Runner
         if @swap_bots
             @spawn_points.reverse!
         end
+        @message_queue = Queue.new
 
         visibility_path = "cache/#{@checksum}.json.gz"
         if @cache && File.exist?(visibility_path)
@@ -408,9 +403,8 @@ class Runner
         @bots << {:position => @spawn_points.shift, :score => 0}
         bot_index = @bots_io.size
         @bots_io << start_bot(path) do |line|
-            if @verbose >= 2 && bot_index == 0
-                STDERR.puts "Bot says: #{line}"
-            end
+            @message_queue << {:bot => bot_index, :line => line}
+            STDERR.puts "Bot says: #{line}"
         end
     end
 
@@ -479,17 +473,35 @@ class Runner
             exit
         end
         print "\033[2J" if @verbose >= 2
-        @tick = 0
+        @tick = -1
         @tps = 0
         t0 = Time.now.to_f
         STDIN.echo = false
         first_capture = nil
         spawned_ttl = 0
+        @protocol = []
         begin
             print "\033[?25l" if @verbose >= 2
             loop do
+                unless @protocol.empty?
+                    until @message_queue.empty?
+                        temp = @message_queue.pop(true) rescue nil
+                        next if temp.nil?
+                        @protocol.last[:messages] ||= []
+                        @protocol.last[:messages] << temp
+                    end
+                end
+                # STEP 5: Advance tick
+                @tick += 1
+                break if @tick >= @max_ticks
+
+                @protocol << { }
+                @protocol.last[:tick] = @tick
+                @protocol.last[:rng_state] = @rng.snapshot
+                # @protocol.last[:beacons] = @beacons
                 tf0 = Time.now.to_f
 
+                # STEP 1: Calculate beacon levels at each tile
                 beacon_level = @beacons.map do |beacon|
                     temp = if @beacon_noise > 0.0
                         beacon[:level].transform_values do |l|
@@ -523,8 +535,10 @@ class Runner
                     @tiles_revealed << t
                 end
 
-                # RENDER
-                render(beacon_level) if @verbose >= 2
+                # STEP 2: RENDER
+                screen = render(beacon_level) if @verbose >= 2
+                @protocol.last[:screen] = screen
+                print screen
                 t1 = Time.now.to_f
                 @tps = (@tick.to_f / (t1 - t0)).round
                 if @verbose == 1
@@ -533,7 +547,7 @@ class Runner
 
                 bot_with_initiative = ((@tick + (@swap_bots ? 1 : 0)) % @bots.size)
 
-                # LET BOTS DECIDE
+                # STEP 3: QUERY BOTS: send data, get response, move but don't collect
                 @bots.each.with_index do |bot, i|
                     bot_position = bot[:position]
                     data = {}
@@ -573,7 +587,10 @@ class Runner
                     data[:beacon_level] = format("%.6f", level_sum).to_f
                     # STDERR.puts data.to_json
                     @bots_io[i].stdin.puts(data.to_json)
+                    @protocol.last[:bots] ||= {}
+                    @protocol.last[:bots][:data] = data
                     line = @bots_io[i].stdout.gets.strip
+                    @protocol.last[:bots][:response] = line
                     command = line.split(' ').first
                     if ['N', 'E', 'S', 'W'].include?(command)
                         dir = {'N' => [0, -1], 'E' => [1, 0], 'S' => [0, 1], 'W' => [-1, 0]}
@@ -597,10 +614,7 @@ class Runner
                     end
                 end
 
-                @tick += 1
-                break if @tick >= @max_ticks
-
-                # ADVANCE LOGIC
+                # STEP 4: COLLECT BEACONS & DECAY BEACONS
                 collected_beacons = []
                 @beacons.each.with_index do |beacon, i|
                     (0...@bots.size).each do |_k|
@@ -616,13 +630,13 @@ class Runner
                 collected_beacons.reverse.each do |i|
                     @beacons.delete_at(i)
                 end
-
                 @beacons.each.with_index do |beacon, i|
                     beacon[:ttl] -= 1
                 end
                 @beacons.reject! do |beacon|
                     beacon[:ttl] <= 0
                 end
+
                 if @rng.next_float() < @beacon_spawn && @beacons.size < @max_beacons
                     spawned_ttl += add_beacon()
                 end
@@ -661,6 +675,7 @@ class Runner
                 result[:beacon_utilization] = (@bots.first[:score].to_f / spawned_ttl * 100.0 * 100).to_i.to_f / 100
             end
         end
+        # STDERR.puts @protocol.to_yaml
         result
     end
 end

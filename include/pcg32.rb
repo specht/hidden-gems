@@ -29,6 +29,16 @@ class PCG32
     self
   end
 
+  def snapshot
+    { state: @state.to_s(36), inc: @inc }
+  end
+
+  def restore!(snap)
+    @state = snap[:state].to_i(36) & MASK64
+    @inc   = snap[:inc]   & MASK64
+    self
+  end
+
   def next_uint32
     oldstate = @state
     @state   = (oldstate * MULT + @inc) & MASK64

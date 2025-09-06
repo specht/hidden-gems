@@ -5,3 +5,6 @@ random-walker/go/bot
 random-walker/cs/RandomWalker.csproj
 random-walker/cs/bin/
 random-walker/cs/obj/
+random-walker/csharp/RandomWalker.csproj
+random-walker/csharp/bin/
+random-walker/csharp/obj/
