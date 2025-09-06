@@ -333,8 +333,8 @@ class Runner
                             end
                         end
                         if @emit_signals
-                            if signal_level[i].include?("#{x}/#{y}")
-                                bg = mix_rgb_hex(GEM_COLOR, bg, 1.0 - signal_level[i]["#{x}/#{y}"])
+                            if signal_level[i].include?((y << 16) | x)
+                                bg = mix_rgb_hex(GEM_COLOR, bg, 1.0 - signal_level[i][(y << 16) | x])
                             end
                         end
                     end
@@ -729,13 +729,32 @@ options = {
     profile: false,
 }
 
+unless ARGV.include?('--stage')
+    ARGV.unshift('--stage', 'current')
+end
+
 GENERATORS = %w(arena divided eller icey cellular uniform digger rogue)
 OptionParser.new do |opts|
     opts.banner = "Usage: ./runner.rb [options]"
 
-    opts.on('-sSTAGE', '--stage STAGE', stages.keys,
-        "Stage (default: none)") do |x|
+    opts.on('--stage STAGE', stages.keys,
+        "Stage (default: #{options[:stage]})") do |x|
         options[:stage] = x
+        options[:stage] = stages['current'] if options[:stage] == 'current'
+        stage = stages[options[:stage]]
+        stage.each_pair do |_key, value|
+            key = _key.to_sym
+            if value.is_a? Integer
+                options[key] = value
+            elsif value.is_a? Float
+                options[key] = value
+            elsif value.is_a? String
+                options[key] = value
+            elsif value == true || value == false
+                options[key] = value
+            end
+        end
+        options.delete(:stage)
     end
     opts.on("-sSEED", "--seed SEED", String, "Seed (default: random)") do |x|
         options[:seed] = x.to_i(36)
@@ -814,25 +833,6 @@ end
 if bot_paths.empty?
     bot_paths << "random-walker/ruby"
 end
-
-# Apply stage if given
-unless options[:stage].nil?
-    options[:stage] = stages['current'] if options[:stage] == 'current'
-    stage = stages[options[:stage]]
-    stage.each_pair do |_key, value|
-        key = _key.to_sym
-        if value.is_a? Integer
-            options[key] = value
-        elsif value.is_a? Float
-            options[key] = value
-        elsif value.is_a? String
-            options[key] = value
-        elsif value == true || value == false
-            options[key] = value
-        end
-    end
-end
-options.delete(:stage)
 
 if options[:rounds] == 1
     runner = Runner.new(**options)
