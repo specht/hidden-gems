@@ -4,5 +4,4 @@ stage-1@0.1:
     height: 11
     generator: arena
     emit_signals: false
-    beacon_spawn: [0.04, 0.06]
-    beacon_icon: ✨
+    gem_spawn: [0.04, 0.06]

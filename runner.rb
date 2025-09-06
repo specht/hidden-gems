@@ -212,7 +212,8 @@ class Runner
 
     PORTAL_EMOJIS = ['🔴', '🔵', '🟢', '🟡']
     ANTENNA_EMOJI = '📡'
-    BEACON_COLOR = '#238acc'
+    GEM_EMOJI = '💎'
+    GEM_COLOR = '#238acc'
     FLOOR_COLOR = '#222728'
     WALL_COLOR = '#555753'
 
@@ -221,36 +222,35 @@ class Runner
     attr_accessor :round
 
     def initialize(width:, height:, generator:, seed:, vis_radius:,
-                   beacon_spawn:, beacon_radius:, beacon_quantization:,
-                   beacon_noise:,beacon_cutoff:, beacon_ttl:, beacon_fade:,
-                   max_beacons:, max_ticks:, swap_bots:, verbose:, max_tps:,
-                   cache:, rounds:, beacon_icon:, emit_signals:, profile:
+                   gem_spawn:, gem_radius:, gem_quantization:,
+                   gem_noise:,gem_cutoff:, gem_ttl:, gem_fade:,
+                   max_gems:, max_ticks:, swap_bots:, verbose:, max_tps:,
+                   cache:, rounds:, emit_signals:, profile:
                    )
         @width = width
         @height = height
         @generator = generator
         @seed = seed
         @vis_radius = vis_radius
-        @beacon_spawn = beacon_spawn
-        @beacon_radius = beacon_radius
-        @beacon_quantization = beacon_quantization
-        @beacon_noise = beacon_noise
-        @beacon_cutoff = beacon_cutoff
-        @beacon_ttl = beacon_ttl
-        @beacon_fade = beacon_fade
-        @max_beacons = max_beacons
+        @gem_spawn = gem_spawn
+        @gem_radius = gem_radius
+        @gem_quantization = gem_quantization
+        @gem_noise = gem_noise
+        @gem_cutoff = gem_cutoff
+        @gem_ttl = gem_ttl
+        @gem_fade = gem_fade
+        @max_gems = max_gems
         @max_ticks = max_ticks
         @swap_bots = swap_bots
         @verbose = verbose
         @max_tps = max_tps
         @cache = cache
         @rounds = rounds
-        @beacon_icon = beacon_icon
         @emit_signals = @emit_signals
         @profile = profile
         @bots = []
         @bots_io = []
-        @beacons = []
+        @gems = []
     end
 
     def start_bot(_path, &block)
@@ -290,7 +290,7 @@ class Runner
         format("#%02X%02X%02X", r, g, b)
     end
 
-    def render(beacon_level)
+    def render(gem_level)
         StringIO.open do |io|
             terminal_height, terminal_width = $stdout.winsize
             tile_width = 3
@@ -327,16 +327,15 @@ class Runner
                             end
                         end
                     end
-                    @beacons.each.with_index do |p, i|
+                    @gems.each.with_index do |p, i|
                         if p[:position][0] == x && p[:position][1] == y
-                            c = @beacon_icon
+                            c = GEM_EMOJI
                             while Unicode::DisplayWidth.of(c) < tile_width
                                 c += ' '
                             end
-                            fg = BEACON_COLOR
                         end
-                        if beacon_level[i].include?("#{x}/#{y}")
-                            bg = mix_rgb_hex(BEACON_COLOR, bg, 1.0 - beacon_level[i]["#{x}/#{y}"])
+                        if gem_level[i].include?("#{x}/#{y}")
+                            bg = mix_rgb_hex(GEM_COLOR, bg, 1.0 - gem_level[i]["#{x}/#{y}"])
                         end
                     end
                     unless @tiles_revealed.include?("#{x}/#{y}")
@@ -408,7 +407,7 @@ class Runner
         end
     end
 
-    def add_beacon()
+    def add_gem()
         floor_tiles = Set.new()
         @maze.each.with_index do |row, y|
             row.each.with_index do |cell, x|
@@ -417,22 +416,22 @@ class Runner
                 end
             end
         end
-        # don't spawn beacon near bot
+        # don't spawn gem near bot
         @bots.each do |bot|
             floor_tiles.delete([bot[:position][0], bot[:position][1]])
         end
-        # don't spawn beacon on another beacon
-        @beacons.each do |beacon|
-            floor_tiles.delete([beacon[:position][0], beacon[:position][1]])
+        # don't spawn gem on another gem
+        @gems.each do |gem|
+            floor_tiles.delete([gem[:position][0], gem[:position][1]])
         end
         return 0 if floor_tiles.empty?
-        beacon = {:position => @rng.sample(floor_tiles.to_a), :ttl => @beacon_ttl}
+        gem = {:position => @rng.sample(floor_tiles.to_a), :ttl => @gem_ttl}
 
-        # pre-calculate beacon level
+        # pre-calculate gem level
         level = {}
         wavefront = Set.new()
-        wavefront << [beacon[:position][0], beacon[:position][1]]
-        level["#{beacon[:position][0]}/#{beacon[:position][1]}"] = 1.0
+        wavefront << [gem[:position][0], gem[:position][1]]
+        level["#{gem[:position][0]}/#{gem[:position][1]}"] = 1.0
         distance = 0
         while !wavefront.empty?
             new_wavefront = Set.new()
@@ -444,11 +443,11 @@ class Runner
                     dy = py + d[1]
                     if dx >= 0 && dy >= 0 && dx < @width && dy < @height
                         if level["#{dx}/#{dy}"].nil? && !@maze[dy][dx]
-                            l = Math.exp(-distance / @beacon_radius)
-                            if @beacon_quantization > 0
-                                l = ((l * @beacon_quantization).to_i).to_f / @beacon_quantization
+                            l = Math.exp(-distance / @gem_radius)
+                            if @gem_quantization > 0
+                                l = ((l * @gem_quantization).to_i).to_f / @gem_quantization
                             end
-                            l = 0.0 if l < @beacon_cutoff
+                            l = 0.0 if l < @gem_cutoff
                             level["#{dx}/#{dy}"] = l
                             new_wavefront << [dx, dy]
                         end
@@ -458,10 +457,10 @@ class Runner
             wavefront = new_wavefront
             distance += 1
         end
-        beacon[:level] = level
+        gem[:level] = level
 
-        @beacons << beacon
-        return @beacon_ttl
+        @gems << gem
+        return @gem_ttl
     end
 
     def run
@@ -498,28 +497,28 @@ class Runner
                 @protocol << { }
                 @protocol.last[:tick] = @tick
                 @protocol.last[:rng_state] = @rng.snapshot
-                # @protocol.last[:beacons] = @beacons
+                # @protocol.last[:gems] = @gems
                 tf0 = Time.now.to_f
 
-                # STEP 1: Calculate beacon levels at each tile
-                beacon_level = @beacons.map do |beacon|
-                    temp = if @beacon_noise > 0.0
-                        beacon[:level].transform_values do |l|
-                            l += (@rng.next_float() - 0.5) * 2.0 * @beacon_noise
+                # STEP 1: Calculate gem levels at each tile
+                gem_level = @gems.map do |gem|
+                    temp = if @gem_noise > 0.0
+                        gem[:level].transform_values do |l|
+                            l += (@rng.next_float() - 0.5) * 2.0 * @gem_noise
                             l = 0.0 if l < 0.0
                             l = 1.0 if l > 1.0
                             l
                         end
                     else
-                        beacon[:level]
+                        gem[:level]
                     end
-                    if @beacon_fade > 0
+                    if @gem_fade > 0
                         t = 1.0
-                        beacon_age = @beacon_ttl - beacon[:ttl]
-                        if beacon_age < @beacon_fade
-                            t = (beacon_age + 1).to_f / @beacon_fade
-                        elsif beacon_age >= @beacon_ttl - @beacon_fade
-                            t = (@beacon_ttl - beacon_age).to_f / @beacon_fade
+                        gem_age = @gem_ttl - gem[:ttl]
+                        if gem_age < @gem_fade
+                            t = (gem_age + 1).to_f / @gem_fade
+                        elsif gem_age >= @gem_ttl - @gem_fade
+                            t = (@gem_ttl - gem_age).to_f / @gem_fade
                         end
                         t = 0.0 if t < 0.0
                         t = 1.0 if t > 1.0
@@ -536,7 +535,7 @@ class Runner
                 end
 
                 # STEP 2: RENDER
-                screen = render(beacon_level) if @verbose >= 2
+                screen = render(gem_level) if @verbose >= 2
                 @protocol.last[:screen] = screen
                 print screen
                 t1 = Time.now.to_f
@@ -553,9 +552,9 @@ class Runner
                     data = {}
                     if @tick == 0
                         data[:config] = {}
-                        %w(width height generator max_ticks vis_radius max_beacons
-                        beacon_spawn beacon_ttl beacon_radius beacon_cutoff beacon_noise
-                        beacon_quantization beacon_fade).each do |key|
+                        %w(width height generator max_ticks vis_radius max_gems
+                        gem_spawn gem_ttl gem_radius gem_cutoff gem_noise
+                        gem_quantization gem_fade).each do |key|
                             data[:config][key.to_sym] = instance_variable_get("@#{key}")
                         end
                         bot_seed = Digest::SHA256.digest("#{@seed}/bot").unpack1('L<')
@@ -566,25 +565,25 @@ class Runner
                     data[:wall] = []
                     data[:floor] = []
                     data[:initiative] = (bot_with_initiative == i)
-                    data[:visible_beacons] = []
+                    data[:visible_gems] = []
                     (@visibility["#{bot_position[0]}/#{bot_position[1]}"] || []).each do |t|
                         _ = t.split('/').map { |x| x.to_i }
                         tx = _[0]
                         ty = _[1]
                         key = @maze[ty][tx] ? :wall : :floor
                         data[key] << _
-                        @beacons.each do |beacon|
-                            if beacon[:position] == _
-                                data[:visible_beacons] << {:position => _, :ttl => beacon[:ttl]}
+                        @gems.each do |gem|
+                            if gem[:position] == _
+                                data[:visible_gems] << {:position => _, :ttl => gem[:ttl]}
                             end
                         end
                     end
                     level_sum = 0.0
-                    @beacons.each.with_index do |beacon, i|
-                        level_sum += beacon_level[i]["#{bot_position[0]}/#{bot_position[1]}"] || 0.0
+                    @gems.each.with_index do |gem, i|
+                        level_sum += gem_level[i]["#{bot_position[0]}/#{bot_position[1]}"] || 0.0
                     end
                     # level_sum = 1.0 if level_sum > 1.0
-                    data[:beacon_level] = format("%.6f", level_sum).to_f
+                    data[:gem_level] = format("%.6f", level_sum).to_f
                     # STDERR.puts data.to_json
                     @bots_io[i].stdin.puts(data.to_json)
                     @protocol.last[:bots] ||= {}
@@ -614,31 +613,31 @@ class Runner
                     end
                 end
 
-                # STEP 4: COLLECT BEACONS & DECAY BEACONS
-                collected_beacons = []
-                @beacons.each.with_index do |beacon, i|
+                # STEP 4: COLLECT GEMS & DECAY GEMS
+                collected_gems = []
+                @gems.each.with_index do |gem, i|
                     (0...@bots.size).each do |_k|
                         k = (_k + bot_with_initiative) % @bots.size
                         bot = @bots[k]
-                        if bot[:position] == beacon[:position]
-                            collected_beacons << i
-                            bot[:score] += beacon[:ttl]
+                        if bot[:position] == gem[:position]
+                            collected_gems << i
+                            bot[:score] += gem[:ttl]
                             first_capture ||= @tick
                         end
                     end
                 end
-                collected_beacons.reverse.each do |i|
-                    @beacons.delete_at(i)
+                collected_gems.reverse.each do |i|
+                    @gems.delete_at(i)
                 end
-                @beacons.each.with_index do |beacon, i|
-                    beacon[:ttl] -= 1
+                @gems.each.with_index do |gem, i|
+                    gem[:ttl] -= 1
                 end
-                @beacons.reject! do |beacon|
-                    beacon[:ttl] <= 0
+                @gems.reject! do |gem|
+                    gem[:ttl] <= 0
                 end
 
-                if @rng.next_float() < @beacon_spawn && @beacons.size < @max_beacons
-                    spawned_ttl += add_beacon()
+                if @rng.next_float() < @gem_spawn && @gems.size < @max_gems
+                    spawned_ttl += add_gem()
                 end
                 STDIN.raw do |stdin|
                     if IO.select([STDIN], nil, nil, 0)
@@ -672,7 +671,7 @@ class Runner
             result[:tile_coverage] = ((@tiles_revealed & temp).size.to_f / temp.size.to_f * 100.0 * 100).to_i.to_f / 100
             result[:ticks_to_first_capture] = first_capture
             if spawned_ttl > 0
-                result[:beacon_utilization] = (@bots.first[:score].to_f / spawned_ttl * 100.0 * 100).to_i.to_f / 100
+                result[:gem_utilization] = (@bots.first[:score].to_f / spawned_ttl * 100.0 * 100).to_i.to_f / 100
             end
         end
         # STDERR.puts @protocol.to_yaml
@@ -689,21 +688,20 @@ options = {
     seed: rand(2 ** 32),
     max_ticks: 1000,
     vis_radius: 5,
-    max_beacons: 1,
-    beacon_spawn: 0.05,
-    beacon_ttl: 300,
-    beacon_radius: 10.0,
-    beacon_cutoff: 0.0,
-    beacon_noise: 0.0,
-    beacon_quantization: 0,
-    beacon_fade: 0,
+    max_gems: 1,
+    gem_spawn: 0.05,
+    gem_ttl: 300,
+    gem_radius: 10.0,
+    gem_cutoff: 0.0,
+    gem_noise: 0.0,
+    gem_quantization: 0,
+    gem_fade: 0,
     swap_bots: false,
     verbose: 2,
     max_tps: 15,
     cache: false,
     rounds: 1,
     emit_signals: true,
-    beacon_icon: "💎",
     profile: false,
 }
 GENERATORS = %w(arena divided eller icey cellular uniform digger rogue)
@@ -733,29 +731,29 @@ OptionParser.new do |opts|
     opts.on("--vis-radius RADIUS", Integer, "Visibility radius (default: #{options[:vis_radius]})") do |x|
         options[:vis_radius] = x
     end
-    opts.on("--max-beacons BEACONS", Integer, "Max. number of beacons (default: #{options[:max_beacons]})") do |x|
-        options[:max_beacons] = x
+    opts.on("--max-gems GEMS", Integer, "Max. number of gems (default: #{options[:max_gems]})") do |x|
+        options[:max_gems] = x
     end
-    opts.on("--beacon-spawn N", Float, "Beacon spawn probability (default: #{options[:beacon_spawn]})") do |x|
-        options[:beacon_spawn] = x
+    opts.on("--gem-spawn N", Float, "Gem spawn probability (default: #{options[:gem_spawn]})") do |x|
+        options[:gem_spawn] = x
     end
-    opts.on("--beacon-ttl TTL", Integer, "Beacon TTL (default: #{options[:beacon_ttl]})") do |x|
-        options[:beacon_ttl] = x
+    opts.on("--gem-ttl TTL", Integer, "Gem TTL (default: #{options[:gem_ttl]})") do |x|
+        options[:gem_ttl] = x
     end
-    opts.on("--beacon-radius N", Float, "Beacon radius (default: #{options[:beacon_radius]})") do |x|
-        options[:beacon_radius] = x
+    opts.on("--gem-radius N", Float, "Gem radius (default: #{options[:gem_radius]})") do |x|
+        options[:gem_radius] = x
     end
-    opts.on("--beacon-cutoff N", Float, "Beacon cutoff (default: #{options[:beacon_cutoff]})") do |x|
-        options[:beacon_cutoff] = x
+    opts.on("--gem-cutoff N", Float, "Gem cutoff (default: #{options[:gem_cutoff]})") do |x|
+        options[:gem_cutoff] = x
     end
-    opts.on("--beacon-noise N", Float, "Beacon noise (default: #{options[:beacon_noise]})") do |x|
-        options[:beacon_noise] = x
+    opts.on("--gem-noise N", Float, "Gem noise (default: #{options[:gem_noise]})") do |x|
+        options[:gem_noise] = x
     end
-    opts.on("--beacon-quantization N", Integer, "Beacon quantization (default: #{options[:beacon_quantization]})") do |x|
-        options[:beacon_quantization] = x
+    opts.on("--gem-quantization N", Integer, "Gem quantization (default: #{options[:gem_quantization]})") do |x|
+        options[:gem_quantization] = x
     end
-    opts.on("--beacon-fade N", Integer, "Beacon fade (default: #{options[:beacon_fade]})") do |x|
-        options[:beacon_fade] = x
+    opts.on("--gem-fade N", Integer, "Gem fade (default: #{options[:gem_fade]})") do |x|
+        options[:gem_fade] = x
     end
     opts.on("--[no-]swap-bots", "Swap starting positions (default: #{options[:swap_bots]})") do |x|
         options[:swap_bots] = x
@@ -823,10 +821,10 @@ else
         runner.setup
         bot_paths.each { |path| runner.add_bot(path) }
         result = runner.run
-        beacon_utilization = result[:beacon_utilization]
+        gem_utilization = result[:gem_utilization]
         ticks_to_first_capture = result[:ticks_to_first_capture]
         tile_coverage = result[:tile_coverage]
-        all_bu << beacon_utilization if beacon_utilization
+        all_bu << gem_utilization if gem_utilization
         all_ttfc << ticks_to_first_capture if ticks_to_first_capture
         all_tc << tile_coverage
         # STDERR.puts result.to_json
@@ -837,7 +835,7 @@ else
     var   = all_bu.map { |x| (x - mean)**2 }.sum / n
     sd    = Math.sqrt(var)
     cv    = sd / mean * 100.0
-    puts sprintf("Beacon Utilization   : %5.1f %%", mean)
+    puts sprintf("Gem Utilization   : %5.1f %%", mean)
     puts sprintf("Relative Instability : %5.1f %%", cv)
     puts sprintf("Time to First Capture: %5.1f ticks", median(all_ttfc))
     puts sprintf("Capture Rate         : %5.1f %%", all_bu.size.to_f * 100 / options[:rounds])
