@@ -402,8 +402,10 @@ class Runner
         @bots << {:position => @spawn_points.shift, :score => 0}
         bot_index = @bots_io.size
         @bots_io << start_bot(path) do |line|
-            @message_queue << {:bot => bot_index, :line => line}
-            STDERR.puts "Bot says: #{line}"
+            if @verbose >= 2
+                @message_queue << {:bot => bot_index, :line => line}
+                STDERR.puts "Bot says: #{line}"
+            end
         end
     end
 
@@ -740,19 +742,19 @@ OptionParser.new do |opts|
     opts.on("--gem-ttl TTL", Integer, "Gem TTL (default: #{options[:gem_ttl]})") do |x|
         options[:gem_ttl] = x
     end
-    opts.on("--gem-radius N", Float, "Gem radius (default: #{options[:gem_radius]})") do |x|
+    opts.on("--gem-radius N", Float, "Gem signal radius (default: #{options[:gem_radius]})") do |x|
         options[:gem_radius] = x
     end
-    opts.on("--gem-cutoff N", Float, "Gem cutoff (default: #{options[:gem_cutoff]})") do |x|
+    opts.on("--gem-cutoff N", Float, "Gem signal cutoff (default: #{options[:gem_cutoff]})") do |x|
         options[:gem_cutoff] = x
     end
-    opts.on("--gem-noise N", Float, "Gem noise (default: #{options[:gem_noise]})") do |x|
+    opts.on("--gem-noise N", Float, "Gem signal noise (default: #{options[:gem_noise]})") do |x|
         options[:gem_noise] = x
     end
-    opts.on("--gem-quantization N", Integer, "Gem quantization (default: #{options[:gem_quantization]})") do |x|
+    opts.on("--gem-quantization N", Integer, "Gem signal quantization (default: #{options[:gem_quantization]})") do |x|
         options[:gem_quantization] = x
     end
-    opts.on("--gem-fade N", Integer, "Gem fade (default: #{options[:gem_fade]})") do |x|
+    opts.on("--gem-fade N", Integer, "Gem signal fade (default: #{options[:gem_fade]})") do |x|
         options[:gem_fade] = x
     end
     opts.on("--[no-]swap-bots", "Swap starting positions (default: #{options[:swap_bots]})") do |x|
@@ -835,7 +837,7 @@ else
     var   = all_bu.map { |x| (x - mean)**2 }.sum / n
     sd    = Math.sqrt(var)
     cv    = sd / mean * 100.0
-    puts sprintf("Gem Utilization   : %5.1f %%", mean)
+    puts sprintf("Gem Utilization      : %5.1f %%", mean)
     puts sprintf("Relative Instability : %5.1f %%", cv)
     puts sprintf("Time to First Capture: %5.1f ticks", median(all_ttfc))
     puts sprintf("Capture Rate         : %5.1f %%", all_bu.size.to_f * 100 / options[:rounds])

@@ -15,6 +15,7 @@ loop do
         height = config['height']
         STDERR.puts "Random walker (Ruby) launching on a #{width}x#{height} map"
     end
-    puts %w[N S E W].sample
+    dir = %w[N S E W].sample
+    puts dir
     first_tick = false
 end
