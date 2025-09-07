@@ -96,7 +96,7 @@ class Runner
 
     Bot = Struct.new(:stdin, :stdout, :stderr, :wait_thr)
 
-    attr_accessor :round, :stage_title
+    attr_accessor :round, :stage_title, :stage_key
 
     def initialize(seed:, width:, height:, generator:, max_ticks:,
                    vis_radius:, gem_spawn_rate:, gem_ttl:, max_gems:,
@@ -130,6 +130,7 @@ class Runner
         @gems = []
         @chatlog = []
         @stage_title = '(no stage)'
+        @stage_key = '(no stage)'
     end
 
     def gen_maze
@@ -213,7 +214,7 @@ class Runner
             # There are two possible places for the chat log:
             # - right side of the maze (if terminal is wide enough)
             # - below the maze (if terminal is high enough)
-            if @terminal_width >= @width * @tile_width + 40
+            if @terminal_width >= @width * @tile_width + 20
                 @enable_chatlog = true
                 @chatlog_position = :right
                 @chatlog_width = @terminal_width - @width * @tile_width - 2
@@ -323,7 +324,8 @@ class Runner
         StringIO.open do |io|
             io.print "\033[H" if @verbose >= 2
 
-            status_line = sprintf("  Seed: #{@seed.to_s(36)}  │  Tick: %#{(@max_ticks - 1).to_s.size}d  │  %d tps  │  Score: #{@bots[0][:score]}", @tick, @tps)
+            status_line = sprintf("  Stage: #{@stage_key}  │  Maze: #{@generator.capitalize} (#{@width}x#{@height})  │  Seed: #{@seed.to_s(36)}  │  Tick: %#{(@max_ticks - 1).to_s.size}d  │  Score: #{@bots[0][:score]}", @tick)
+            status_line = status_line[0, @terminal_width] if status_line.size > @terminal_width
             status_line = status_line + ' ' * (@terminal_width - status_line.size)
 
             io.puts Paint[status_line, UI_FOREGROUND, UI_BACKGROUND]
@@ -472,7 +474,8 @@ class Runner
         spawned_ttl = 0
         @protocol = []
         @chatlog << {emoji: ANNOUNCER_EMOJI, text: "Welcome to Hidden Gems!" }
-        @chatlog << {emoji: ANNOUNCER_EMOJI, text: "Today's stage is #{@stage_title} (#{@generator} @ #{@width}x#{@height})" }
+        @chatlog << {emoji: ANNOUNCER_EMOJI, text: "Today's stage is #{@stage_title} (v#{@stage_key.split('@').last})" }
+        # @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@generator.capitalize} @ #{@width}x#{@height} with seed #{@seed.to_s(36)}" }
         if @bots.size == 1
             @chatlog << {emoji: ANNOUNCER_EMOJI, text: "All eyes on our lone contestant:" }
         else
@@ -484,7 +487,6 @@ class Runner
         if @bots.size > 1
             @chatlog << {emoji: ANNOUNCER_EMOJI, text: @rng.sample(COMMENT_VERSUS) }
         end
-            @chatlog << {emoji: ANNOUNCER_EMOJI, text: '-' * 30 }
         begin
             print "\033[?25l" if @verbose >= 2
             loop do
@@ -642,6 +644,7 @@ class Runner
                             collected_gems << i
                             bot[:score] += gem[:ttl]
                             first_capture ||= @tick
+                            @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{bot[:name]} scored a gem with #{gem[:ttl]} points!" }
                         end
                     end
                 end
@@ -730,6 +733,7 @@ end
 
 GENERATORS = %w(arena divided eller icey cellular uniform digger rogue)
 stage_title = nil
+stage_key = nil
 OptionParser.new do |opts|
     opts.banner = "Usage: ./runner.rb [options]"
 
@@ -738,6 +742,7 @@ OptionParser.new do |opts|
         options[:stage] = x
         options[:stage] = stages['current'] if options[:stage] == 'current'
         stage = stages[options[:stage]]
+        stage_key = options[:stage]
         stage_title = stage['title']
         stage.each_pair do |_key, value|
             key = _key.to_sym
@@ -840,6 +845,7 @@ end
 if options[:rounds] == 1
     runner = Runner.new(**options)
     runner.stage_title = stage_title if stage_title
+    runner.stage_key = stage_key if stage_key
     runner.setup
     bot_paths.each { |path| runner.add_bot(path) }
     runner.run
@@ -854,6 +860,7 @@ else
         runner = Runner.new(**options)
         runner.round = i
         runner.stage_title = stage_title if stage_title
+        runner.stage_key = stage_key if stage_key
         runner.setup
         bot_paths.each { |path| runner.add_bot(path) }
         result = runner.run
