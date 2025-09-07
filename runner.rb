@@ -199,7 +199,6 @@ class Runner
         end
 
         @tiles_revealed = Set.new()
-        @tiles_reported = Set.new()
 
         @terminal_height, @terminal_width = $stdout.winsize
 
@@ -584,19 +583,15 @@ class Runner
                     data[:initiative] = (bot_with_initiative == i)
                     data[:visible_gems] = []
 
-                    new_reported_tiles = Set.new()
-                    this_round = (@visibility[(bot_position[1] << 16) | bot_position[0]] - @tiles_reported)
-                    this_round.each do |t|
+                    @visibility[(bot_position[1] << 16) | bot_position[0]].each do |t|
                         key = @maze.include?(t) ? :wall : :floor
                         data[key] << [t & 0xFFFF, t >> 16]
-                        new_reported_tiles << t
                         @gems.each do |gem|
                             if gem[:position_offset] == t
                                 data[:visible_gems] << {:position => gem[:position], :ttl => gem[:ttl]}
                             end
                         end
                     end
-                    @tiles_reported |= new_reported_tiles
                     if @emit_signals
                         level_sum = 0.0
                         @gems.each.with_index do |gem, i|
