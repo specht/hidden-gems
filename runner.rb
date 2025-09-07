@@ -103,7 +103,7 @@ class Runner
                    vis_radius:, gem_spawn_rate:, gem_ttl:, max_gems:,
                    emit_signals:, signal_radius:, signal_quantization:,
                    signal_noise:, signal_cutoff:, signal_fade:, swap_bots:,
-                   verbose:, max_tps:, cache:, rounds:, profile:, use_docker:
+                   cache:, profile:, use_docker:, rounds:, verbose:, max_tps:
                    )
         @seed = seed
         @width = width
@@ -121,12 +121,12 @@ class Runner
         @signal_cutoff = signal_cutoff
         @signal_fade = signal_fade
         @swap_bots = swap_bots
-        @verbose = verbose
-        @max_tps = max_tps
         @cache = cache
-        @rounds = rounds
         @profile = profile
         @use_docker = use_docker
+        @rounds = rounds
+        @verbose = verbose
+        @max_tps = max_tps
         @bots = []
         @bots_io = []
         @gems = []
@@ -751,10 +751,10 @@ options = {
     verbose: 2,
     max_tps: 15,
     cache: false,
-    rounds: 1,
     emit_signals: false,
     profile: false,
     use_docker: false,
+    rounds: 1,
 }
 
 unless ARGV.include?('--stage')
@@ -838,17 +838,8 @@ OptionParser.new do |opts|
     opts.on("--[no-]swap-bots", "Swap starting positions (default: #{options[:swap_bots]})") do |x|
         options[:swap_bots] = x
     end
-    opts.on("-vVERBOSE", "--verbose N", Integer, "Verbosity level (default: #{options[:verbose]})") do |x|
-        options[:verbose] = x
-    end
-    opts.on("--max-tps N", Integer, "Max ticks/second (0 to disable, default: #{options[:max_tps]})") do |x|
-        options[:max_tps] = x
-    end
     opts.on("-c", "--[no-]cache", "Enable caching of pre-computed visibility (default: #{options[:cache]})") do |x|
         options[:cache] = x
-    end
-    opts.on("-rN", "--rounds N", Integer, "Rounds (default: #{options[:rounds]})") do |x|
-        options[:rounds] = x
     end
     opts.on("-p", "--[no-]profile", "Report KPIs (default: #{options[:profile]})") do |x|
         options[:profile] = x
@@ -857,8 +848,17 @@ OptionParser.new do |opts|
             options[:verbose] = 0
         end
     end
-    opts.on("-d", "--[no-]docker", "Use Docker (default: #{options[:use_docker]})") do |x|
+    opts.on("-d", "--[no-]use-docker", "Use Docker to run bots (default: #{options[:use_docker]})") do |x|
         options[:use_docker] = x
+    end
+    opts.on("-rN", "--rounds N", Integer, "Rounds (default: #{options[:rounds]})") do |x|
+        options[:rounds] = x
+    end
+    opts.on("-vVERBOSE", "--verbose N", Integer, "Verbosity level (default: #{options[:verbose]})") do |x|
+        options[:verbose] = x
+    end
+    opts.on("--max-tps N", Integer, "Max ticks/second (0 to disable, default: #{options[:max_tps]})") do |x|
+        options[:max_tps] = x
     end
 end.parse!
 
