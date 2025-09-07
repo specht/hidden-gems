@@ -449,7 +449,7 @@ class Runner
         @gems.each do |gem|
             candidate_tiles.delete((gem[:position][1] << 16) | gem[:position][0])
         end
-        return if candidate_tiles.empty?
+        return 0 if candidate_tiles.empty?
         gem = {:position_offset => @rng.sample(candidate_tiles.to_a.sort), :ttl => @gem_ttl}
         gem[:position] = [gem[:position_offset] & 0xFFFF, gem[:position_offset] >> 16]
 
@@ -487,6 +487,7 @@ class Runner
         gem[:level] = level
 
         @gems << gem
+        return gem[:ttl]
     end
 
     def run
@@ -508,6 +509,7 @@ class Runner
         @tiles_revealed = @bots.map do |b|
             Set.new()
         end
+        ttl_spawned = 0
 
         @protocol = @bots.map { |b| [] }
         @chatlog << {emoji: ANNOUNCER_EMOJI, text: "Welcome to Hidden Gems!" }
@@ -691,7 +693,7 @@ class Runner
                 end
 
                 if @rng.next_float() < @gem_spawn_rate && @gems.size < @max_gems
-                    add_gem()
+                    ttl_spawned += add_gem()
                 end
                 STDIN.raw do |stdin|
                     if IO.select([STDIN], nil, nil, 0)
@@ -721,6 +723,7 @@ class Runner
         @bots.each.with_index do |bot, i|
             results[i][:score] = bot[:score]
             if @profile
+                results[i][:gem_utilization] = (ttl_spawned > 0 ? (bot[:score].to_f / ttl_spawned.to_f * 100.0 * 100).to_i.to_f / 100 : 0.0)
                 results[i][:tile_coverage] = ((@tiles_revealed[i] & @floor_tiles_set).size.to_f / @floor_tiles_set.size.to_f * 100.0 * 100).to_i.to_f / 100
             end
             if @check_determinism
@@ -767,6 +770,7 @@ end
 GENERATORS = %w(arena divided eller icey cellular uniform digger rogue)
 stage_title = nil
 stage_key = nil
+write_profile_json_path = nil
 OptionParser.new do |opts|
     opts.banner = "Usage: ./runner.rb [options] /path/to/bot1 [ /path/to/bot2 ]"
 
@@ -851,6 +855,9 @@ OptionParser.new do |opts|
             options[:verbose] = 0
         end
     end
+    opts.on("--write-profile-json PATH", "Write profile results to JSON file") do |x|
+        write_profile_json_path = x
+    end
     opts.on("--[no-]check-determinism", "Check for deterministic behaviour and exit (default: #{options[:check_determinism]})") do |x|
         options[:check_determinism] = x
     end
@@ -911,6 +918,8 @@ if options[:check_determinism]
     exit(0)
 end
 
+og_seed = options[:seed]
+
 if options[:rounds] == 1
     runner = Runner.new(**options)
     runner.stage_title = stage_title if stage_title
@@ -922,6 +931,7 @@ else
     round_seed = Digest::SHA256.digest("#{options[:seed]}/rounds").unpack1('L<')
     seed_rng = PCG32.new(round_seed)
     all_score = bot_paths.map { [] }
+    all_utilization = bot_paths.map { [] }
     all_ttfc = bot_paths.map { [] }
     all_tc = bot_paths.map { [] }
 
@@ -943,6 +953,7 @@ else
         results = runner.run
         (0...bot_paths.size).each do |k|
             all_score[k] << results[k][:score]
+            all_utilization[k] << results[k][:gem_utilization]
             all_ttfc[k] << results[k][:ticks_to_first_capture] if results[k][:ticks_to_first_capture]
             all_tc[k] << results[k][:tile_coverage]
         end
@@ -951,16 +962,31 @@ else
 
     bot_data.each.with_index do |data, i|
         puts "Results for #{data[:emoji]} #{data[:name]}"
-        n     = all_score[i].size
-        mean  = all_score[i].sum(0.0) / n
-        var   = all_score[i].map { |x| (x - mean) ** 2 }.sum / n
+        n     = all_utilization[i].size
+        mean  = all_utilization[i].sum(0.0) / n
+        var   = all_utilization[i].map { |x| (x - mean) ** 2 }.sum / n
         sd    = Math.sqrt(var)
         cv    = sd / mean * 100.0
-        puts sprintf("Total Score          : %d", all_score[i].sum)
-        puts sprintf("Mean Score           : %5.1f", mean)
-        puts sprintf("Relative Instability : %5.1f %%", cv)
-        # puts sprintf("Time to First Capture: %5.1f ticks", median(all_ttfc[i]))
-        # puts sprintf("Capture Rate         : %5.1f %%", all_bu.size.to_f * 100 / options[:rounds])
-        puts sprintf("Floor Tile Coverage  : %5.1f %%", mean(all_tc[i]))
+        puts sprintf("Total Score     : %d", all_score[i].sum)
+        puts sprintf("Gem Utilization : %5.1f %%", mean)
+        puts sprintf("Chaos Factor    : %5.1f %%", cv)
+        puts sprintf("Floor Coverage  : %5.1f %%", mean(all_tc[i]))
+        if write_profile_json_path
+            File.open(write_profile_json_path, 'w') do |f|
+                report = {}
+                report[:timestamp] = Time.now.to_i
+                report[:stage_key] = stage_key
+                report[:stage_title] = stage_title
+                report[:git_hash] = `git describe --always --dirty`.strip
+                report[:seed] = og_seed.to_s(36)
+                report[:name] = data[:name]
+                report[:emoji] = data[:emoji]
+                report[:total_score] = all_score[i].sum
+                report[:gem_utilization_mean] = mean
+                report[:gem_utilization_cv] = cv
+                report[:floor_coverage_mean] = mean(all_tc[i])
+                f.write(report.to_json)
+            end
+        end
     end
 end
