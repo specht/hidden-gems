@@ -252,7 +252,7 @@ class Runner
     end
 
     def start_bot(_path, &block)
-        path = File.join(File.expand_path(_path), 'start.sh')
+        path = File.join(File.expand_path(_path), Gem.win_platform? ? 'start.bat' : 'start.sh')
         stdin, stdout, stderr, wait_thr = Open3.popen3(path, chdir: File.dirname(path))
         stdin.sync = true
         stdout.sync = true
