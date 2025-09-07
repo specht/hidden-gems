@@ -46,13 +46,57 @@ class Runner
     PORTAL_EMOJIS = ['🔴', '🔵', '🟢', '🟡']
     ANTENNA_EMOJI = '📡'
     GEM_EMOJI = '💎'
+    ANNOUNCER_EMOJI = '🎙️'
     GEM_COLOR = '#238acc'
     FLOOR_COLOR = '#222728'
     WALL_COLOR = '#555753'
+    COMMENT_SINGLE = [
+        "Always curious, never standing still.",
+        "Ready to chase the signal, no matter where it leads.",
+        "A true explorer of the unknown.",
+        "Quick on their feet, but will luck be on their side?",
+        "Bringing energy, even when the path is unclear.",
+        "Prepared to turn confusion into discovery.",
+        "They may stumble, but they always keep going.",
+        "Every step could be the one that finds the gem.",
+        "Chaos, courage, and a hint of brilliance.",
+        "Sometimes lost, sometimes lucky, always entertaining.",
+        "They wander, they wobble, they win (sometimes).",
+        "Expect the unexpected whenever this bot appears.",
+    ]
+    COMMENT_VERSUS = [
+        "Two paths cross — only one will shine brighter.",
+        "A duel of instincts begins!",
+        "Both are eager, but who will read the maze better?",
+        "Signals are flickering… tension is rising!",
+        "Every step counts when rivals share the arena.",
+        "Their strategies may differ, but the goal is the same.",
+        "Brace yourselves, this maze is big enough for both… or is it?",
+        "We’ve seen surprises before, and we’ll see them again.",
+        "Who stumbles first, and who seizes the gem?",
+        "The maze doesn’t care who wins, but we do.",
+        "A clash of styles — randomness meets randomness!",
+        "Head-to-head in the fog — anything can happen.",
+    ]
+    COMMENT_HYPE = [
+        "It’s a showdown!",
+        "Let’s rumble!",
+        "Face-off in the maze!",
+        "Here we go!",
+        "Head to head!",
+        "The maze decides!",
+        "And they’re off!",
+        "Gem hunters clash!",
+        "Game on!",
+        "Ready… set… scramble!",
+        "The hunt is live!",
+        "All signals point to battle!",
+        "It’s anybody’s gem!",
+    ]
 
     Bot = Struct.new(:stdin, :stdout, :stderr, :wait_thr)
 
-    attr_accessor :round
+    attr_accessor :round, :stage_title
 
     def initialize(seed:, width:, height:, generator:, max_ticks:,
                    vis_radius:, gem_spawn_rate:, gem_ttl:, max_gems:,
@@ -84,23 +128,8 @@ class Runner
         @bots = []
         @bots_io = []
         @gems = []
-    end
-
-    def start_bot(_path, &block)
-        path = File.join(File.expand_path(_path), Gem.win_platform? ? 'start.bat' : 'start.sh')
-        stdin, stdout, stderr, wait_thr = Open3.popen3(path, chdir: File.dirname(path))
-        stdin.sync = true
-        stdout.sync = true
-        stderr.sync = true
-        err_thread = Thread.new do
-            begin
-                stderr.each_line do |line|
-                    yield line if block_given?
-                end
-            rescue IOError
-            end
-        end
-        Bot.new(stdin, stdout, stderr, wait_thr)
+        @chatlog = []
+        @stage_title = '(no stage)'
     end
 
     def gen_maze
@@ -111,78 +140,6 @@ class Runner
             row = line.split('').map.with_index { |e, x| e == '#' ? (y << 16) | x : nil }
         end.flatten.reject { |x| x.nil? }
         Set.new(maze)
-    end
-
-    def mix_rgb_hex(c1, c2, t)
-        x = c1[1..].scan(/../).map { |h| h.to_i(16) }
-        y = c2[1..].scan(/../).map { |h| h.to_i(16) }
-
-        r = (x[0] + (y[0] - x[0]) * t).round.clamp(0, 255)
-        g = (x[1] + (y[1] - x[1]) * t).round.clamp(0, 255)
-        b = (x[2] + (y[2] - x[2]) * t).round.clamp(0, 255)
-
-        format("#%02X%02X%02X", r, g, b)
-    end
-
-    def render(signal_level)
-        StringIO.open do |io|
-            terminal_height, terminal_width = $stdout.winsize
-            tile_width = 2
-
-            io.print "\033[H" if @verbose >= 2
-
-            status_line = sprintf("  Seed: #{@seed.to_s(36)}  │  Tick: %#{(@max_ticks - 1).to_s.size}d  │  %d tps  │  Score: #{@bots[0][:score]}", @tick, @tps)
-            status_line = status_line + ' ' * (terminal_width - status_line.size)
-
-            io.puts Paint[status_line, UI_FOREGROUND, UI_BACKGROUND]
-
-            paint_rng = PCG32.new(1234)
-
-            bots_visible = @bots.map do |bot|
-                @visibility[(bot[:position][1] << 16) | bot[:position][0]]
-            end
-
-            (0...@height).each do |y|
-                (0...@width).each do |x|
-                    c = ' ' * tile_width
-                    bg = FLOOR_COLOR
-                    fg = WALL_COLOR
-                    if @maze.include?((y << 16) | x)
-                        c = '█' * tile_width
-                        fg = mix_rgb_hex(WALL_COLOR, '#000000', paint_rng.next_float() * 0.25)
-                    end
-                    @bots.each.with_index do |bot, i|
-                        p = bot[:position]
-                        if p[0] == x && p[1] == y
-                            c = @bots[i][:emoji]
-                            while Unicode::DisplayWidth.of(c) < tile_width
-                                c += ' '
-                            end
-                        end
-                    end
-                    @gems.each.with_index do |p, i|
-                        if p[:position][0] == x && p[:position][1] == y
-                            c = GEM_EMOJI
-                            while Unicode::DisplayWidth.of(c) < tile_width
-                                c += ' '
-                            end
-                        end
-                        if @emit_signals
-                            if signal_level[i].include?((y << 16) | x)
-                                bg = mix_rgb_hex(GEM_COLOR, bg, 1.0 - signal_level[i][(y << 16) | x])
-                            end
-                        end
-                    end
-                    unless @tiles_revealed.include?((y << 16) | x)
-                        fg = mix_rgb_hex(fg, '#000000', 0.5)
-                        bg = mix_rgb_hex(bg, '#000000', 0.5)
-                    end
-                    io.print Paint[c, fg, bg]
-                end
-                io.puts
-            end
-            io.string
-        end
     end
 
     def setup
@@ -242,6 +199,193 @@ class Runner
 
         @tiles_revealed = Set.new()
         @tiles_reported = Set.new()
+
+        @terminal_height, @terminal_width = $stdout.winsize
+
+        @tile_width = 2
+
+        @enable_chatlog = false
+        @chatlog_position = nil
+        @chatlog_width = 0
+        @chatlog_height = 0
+
+        if @verbose >= 2
+            # There are two possible places for the chat log:
+            # - right side of the maze (if terminal is wide enough)
+            # - below the maze (if terminal is high enough)
+            if @terminal_width >= @width * @tile_width + 40
+                @enable_chatlog = true
+                @chatlog_position = :right
+                @chatlog_width = @terminal_width - @width * @tile_width - 2
+                @chatlog_height = @height
+            elsif @terminal_height >= @height + 11
+                @enable_chatlog = true
+                @chatlog_position = :bottom
+                @chatlog_width = @terminal_width - 1
+                @chatlog_height = @terminal_height - @height - 1
+            end
+        end
+    end
+
+    def start_bot(_path, &block)
+        path = File.join(File.expand_path(_path), Gem.win_platform? ? 'start.bat' : 'start.sh')
+        stdin, stdout, stderr, wait_thr = Open3.popen3(path, chdir: File.dirname(path))
+        stdin.sync = true
+        stdout.sync = true
+        stderr.sync = true
+        err_thread = Thread.new do
+            begin
+                stderr.each_line do |line|
+                    yield line if block_given?
+                end
+            rescue IOError
+            end
+        end
+        Bot.new(stdin, stdout, stderr, wait_thr)
+    end
+
+    def mix_rgb_hex(c1, c2, t)
+        x = c1[1..].scan(/../).map { |h| h.to_i(16) }
+        y = c2[1..].scan(/../).map { |h| h.to_i(16) }
+
+        r = (x[0] + (y[0] - x[0]) * t).round.clamp(0, 255)
+        g = (x[1] + (y[1] - x[1]) * t).round.clamp(0, 255)
+        b = (x[2] + (y[2] - x[2]) * t).round.clamp(0, 255)
+
+        format("#%02X%02X%02X", r, g, b)
+    end
+
+    def vwidth(str)
+        Unicode::DisplayWidth.of(str.to_s, emoji: true, ambwidth: 1)
+    end
+
+    # Split an overlong token into visual-width chunks, preserving all characters.
+    def chunk_token(token, limit)
+        return [token] if vwidth(token) <= limit || limit <= 0
+        chunks = []
+        buf = +""
+        token.scan(/\X/) do |g| # \X = Unicode grapheme
+            if vwidth(buf + g) > limit
+                chunks << buf
+                buf = g.dup
+            else
+                buf << g
+            end
+        end
+        chunks << buf unless buf.empty?
+        chunks
+    end
+
+    def wrap_entry(text, emoji, width, show_prefix: true)
+        prefix = show_prefix ? "#{emoji} " : "  " # emoji only if show_prefix
+        while vwidth(prefix) < 3
+            prefix += " "
+        end
+        pwidth = vwidth(prefix)
+        body_w = [width - pwidth, 0].max
+        indent = " " * pwidth
+
+        out = []
+        line = +""
+
+        tokens = text.split(/\s+/).flat_map { |t| chunk_token(t, body_w) }
+        tokens.each do |tok|
+            if line.empty?
+                line = tok.dup
+            else
+                if vwidth(line) + 1 + vwidth(tok) <= body_w
+                    line << " " << tok
+                else
+                    out << line
+                    line = tok.dup
+                end
+            end
+        end
+        out << line unless line.empty?
+
+        out.each_with_index.map { |l, i| (i == 0 ? prefix : indent) + l }
+    end
+
+    def render_chatlog(entries, width, height)
+        lines = []
+        prev_emoji = nil
+
+        entries.each do |e|
+            show_prefix = (e[:emoji] != prev_emoji)
+            lines.concat(wrap_entry(e[:text], e[:emoji], width, show_prefix: show_prefix))
+            prev_emoji = e[:emoji]
+        end
+
+        lines.last([height, 0].max).map { |l| l.ljust(width) }
+    end
+
+    def render(signal_level)
+        StringIO.open do |io|
+            io.print "\033[H" if @verbose >= 2
+
+            status_line = sprintf("  Seed: #{@seed.to_s(36)}  │  Tick: %#{(@max_ticks - 1).to_s.size}d  │  %d tps  │  Score: #{@bots[0][:score]}", @tick, @tps)
+            status_line = status_line + ' ' * (@terminal_width - status_line.size)
+
+            io.puts Paint[status_line, UI_FOREGROUND, UI_BACKGROUND]
+
+            paint_rng = PCG32.new(1234)
+
+            bots_visible = @bots.map do |bot|
+                @visibility[(bot[:position][1] << 16) | bot[:position][0]]
+            end
+
+            chat_lines = nil
+            if @enable_chatlog
+                chat_lines = render_chatlog(@chatlog, @chatlog_width, @chatlog_height)
+            end
+
+            (0...@height).each do |y|
+                (0...@width).each do |x|
+                    c = ' ' * @tile_width
+                    bg = FLOOR_COLOR
+                    if @maze.include?((y << 16) | x)
+                        bg = mix_rgb_hex(WALL_COLOR, '#000000', paint_rng.next_float() * 0.25)
+                    end
+                    @bots.each.with_index do |bot, i|
+                        p = bot[:position]
+                        if p[0] == x && p[1] == y
+                            c = @bots[i][:emoji]
+                            while vwidth(c) < @tile_width
+                                c += ' '
+                            end
+                        end
+                    end
+                    @gems.each.with_index do |p, i|
+                        if p[:position][0] == x && p[:position][1] == y
+                            c = GEM_EMOJI
+                            while vwidth(c) < @tile_width
+                                c += ' '
+                            end
+                        end
+                        if @emit_signals
+                            if signal_level[i].include?((y << 16) | x)
+                                bg = mix_rgb_hex(GEM_COLOR, bg, 1.0 - signal_level[i][(y << 16) | x])
+                            end
+                        end
+                    end
+                    unless @tiles_revealed.include?((y << 16) | x)
+                        bg = mix_rgb_hex(bg, '#000000', 0.5)
+                    end
+                    io.print Paint[c, nil, bg]
+                end
+                if @enable_chatlog && @chatlog_position == :right
+                    io.print ' '
+                    io.print chat_lines[y]
+                end
+                io.puts
+            end
+            if @enable_chatlog && @chatlog_position == :bottom
+                chat_lines.each do |line|
+                    io.puts line
+                end
+            end
+            io.string
+        end
     end
 
     def add_bot(path)
@@ -256,7 +400,6 @@ class Runner
         @bots_io << start_bot(path) do |line|
             if @verbose >= 2
                 @message_queue << {:bot => bot_index, :line => line}
-                STDERR.puts " #{@bots[bot_index][:emoji]}  #{line}"
             end
         end
     end
@@ -328,6 +471,20 @@ class Runner
         first_capture = nil
         spawned_ttl = 0
         @protocol = []
+        @chatlog << {emoji: ANNOUNCER_EMOJI, text: "Welcome to Hidden Gems!" }
+        @chatlog << {emoji: ANNOUNCER_EMOJI, text: "Today's stage is #{@stage_title} (#{@generator} @ #{@width}x#{@height})" }
+        if @bots.size == 1
+            @chatlog << {emoji: ANNOUNCER_EMOJI, text: "All eyes on our lone contestant:" }
+        else
+            @chatlog << {emoji: ANNOUNCER_EMOJI, text: "Two bots enter the maze:" }
+        end
+        @bots.each.with_index do |bot, i|
+            @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{bot[:emoji]} #{bot[:name]}: #{@rng.sample(COMMENT_SINGLE)}" }
+        end
+        if @bots.size > 1
+            @chatlog << {emoji: ANNOUNCER_EMOJI, text: @rng.sample(COMMENT_VERSUS) }
+        end
+            @chatlog << {emoji: ANNOUNCER_EMOJI, text: '-' * 30 }
         begin
             print "\033[?25l" if @verbose >= 2
             loop do
@@ -335,6 +492,7 @@ class Runner
                     until @message_queue.empty?
                         temp = @message_queue.pop(true) rescue nil
                         next if temp.nil?
+                        @chatlog << {emoji: @bots[temp[:bot]][:emoji], text: temp[:line].chomp}
                         @protocol.last[:messages] ||= []
                         @protocol.last[:messages] << temp
                     end
@@ -380,9 +538,11 @@ class Runner
                     end
                 end
 
-                bot_position = @bots[0][:position]
-                @visibility[(bot_position[1] << 16) | bot_position[0]].each do |t|
-                    @tiles_revealed << t
+                @bots.each do |bot|
+                    bot_position = bot[:position]
+                    @visibility[(bot_position[1] << 16) | bot_position[0]].each do |t|
+                        @tiles_revealed << t
+                    end
                 end
 
                 # STEP 2: RENDER
@@ -569,6 +729,7 @@ unless ARGV.include?('--stage')
 end
 
 GENERATORS = %w(arena divided eller icey cellular uniform digger rogue)
+stage_title = nil
 OptionParser.new do |opts|
     opts.banner = "Usage: ./runner.rb [options]"
 
@@ -577,8 +738,10 @@ OptionParser.new do |opts|
         options[:stage] = x
         options[:stage] = stages['current'] if options[:stage] == 'current'
         stage = stages[options[:stage]]
+        stage_title = stage['title']
         stage.each_pair do |_key, value|
             key = _key.to_sym
+            next if key == :title
             if value.is_a? Integer
                 options[key] = value
             elsif value.is_a? Float
@@ -669,8 +832,14 @@ if bot_paths.empty?
     bot_paths << "random-walker/ruby"
 end
 
+if bot_paths.size > 2
+    STDERR.puts "Error: At most two bots can compete."
+    exit 1
+end
+
 if options[:rounds] == 1
     runner = Runner.new(**options)
+    runner.stage_title = stage_title if stage_title
     runner.setup
     bot_paths.each { |path| runner.add_bot(path) }
     runner.run
@@ -684,6 +853,7 @@ else
         options[:seed] = seed_rng.randrange(2 ** 32)
         runner = Runner.new(**options)
         runner.round = i
+        runner.stage_title = stage_title if stage_title
         runner.setup
         bot_paths.each { |path| runner.add_bot(path) }
         result = runner.run

@@ -1,5 +1,6 @@
 current: stage-0@0.1
 stage-0@0.1:
+    title: System Check
     width: 19
     height: 19
     generator: arena
