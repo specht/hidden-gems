@@ -14,6 +14,7 @@ require 'open3'
 require 'optparse'
 require 'paint'
 require 'set'
+require 'stringio'
 require 'unicode/display_width'
 require 'yaml'
 require 'zlib'
@@ -292,7 +293,7 @@ class Runner
     def render(signal_level)
         StringIO.open do |io|
             terminal_height, terminal_width = $stdout.winsize
-            tile_width = 3
+            tile_width = 2
 
             io.print "\033[H" if @verbose >= 2
 
@@ -481,7 +482,7 @@ class Runner
         trap("INT") do
             @bots_io.each { |b| b.stdin.close rescue nil }
             @bots_io.each do |b|
-                b.wait_thr.join(0.2) or Process.kill("TERM", b.wait_thr.pid) rescue nil
+                b.wait_thr.join(0.2) or Process.kill(Gem.win_platform? ? "KILL" : "TERM", b.wait_thr.pid) rescue nil
             end
             exit
         end
@@ -674,7 +675,7 @@ class Runner
                 end
             end
             @bots_io.each do |b|
-                Process.kill("TERM", b.wait_thr.pid)
+                Process.kill(Gem.win_platform? ? "KILL" : "TERM", b.wait_thr.pid)
             end
         ensure
             print "\033[?25h" if @verbose >= 2
