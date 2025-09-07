@@ -97,13 +97,14 @@ class Runner
     Bot = Struct.new(:stdin, :stdout, :stderr, :wait_thr)
 
     attr_accessor :round, :stage_title, :stage_key
-    attr_reader :bots
+    attr_reader :bots, :rng
 
     def initialize(seed:, width:, height:, generator:, max_ticks:,
                    vis_radius:, gem_spawn_rate:, gem_ttl:, max_gems:,
                    emit_signals:, signal_radius:, signal_quantization:,
                    signal_noise:, signal_cutoff:, signal_fade:, swap_bots:,
-                   cache:, profile:, use_docker:, rounds:, verbose:, max_tps:
+                   cache:, profile:, check_determinism:, use_docker:,
+                   rounds:, verbose:, max_tps:
                    )
         @seed = seed
         @width = width
@@ -123,6 +124,7 @@ class Runner
         @swap_bots = swap_bots
         @cache = cache
         @profile = profile
+        @check_determinism = check_determinism
         @use_docker = use_docker
         @rounds = rounds
         @verbose = verbose
@@ -448,7 +450,7 @@ class Runner
             candidate_tiles.delete((gem[:position][1] << 16) | gem[:position][0])
         end
         return if candidate_tiles.empty?
-        gem = {:position_offset => @rng.sample(candidate_tiles.to_a), :ttl => @gem_ttl}
+        gem = {:position_offset => @rng.sample(candidate_tiles.to_a.sort), :ttl => @gem_ttl}
         gem[:position] = [gem[:position_offset] & 0xFFFF, gem[:position_offset] >> 16]
 
         # pre-calculate gem level
@@ -507,7 +509,7 @@ class Runner
             Set.new()
         end
 
-        @protocol = []
+        @protocol = @bots.map { |b| [] }
         @chatlog << {emoji: ANNOUNCER_EMOJI, text: "Welcome to Hidden Gems!" }
         @chatlog << {emoji: ANNOUNCER_EMOJI, text: "Today's stage is #{@stage_title} (v#{@stage_key.split('@').last})" }
         # @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@generator.capitalize} @ #{@width}x#{@height} with seed #{@seed.to_s(36)}" }
@@ -516,7 +518,8 @@ class Runner
         else
             @chatlog << {emoji: ANNOUNCER_EMOJI, text: "Two bots enter the maze:" }
         end
-        comments = @rng.shuffle!(COMMENT_SINGLE)
+        comments = COMMENT_SINGLE.dup
+        @rng.shuffle!(comments)
         @bots.each.with_index do |bot, i|
             @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{bot[:name]} #{bot[:emoji]} -- #{comments.shift}" }
         end
@@ -526,23 +529,20 @@ class Runner
         begin
             print "\033[?25l" if @verbose >= 2
             loop do
-                unless @protocol.empty?
-                    until @message_queue.empty?
-                        temp = @message_queue.pop(true) rescue nil
-                        next if temp.nil?
-                        @chatlog << {emoji: @bots[temp[:bot]][:emoji], text: temp[:line].chomp}
-                        @protocol.last[:messages] ||= []
-                        @protocol.last[:messages] << temp
-                    end
+                until @message_queue.empty?
+                    temp = @message_queue.pop(true) rescue nil
+                    next if temp.nil?
+                    @chatlog << {emoji: @bots[temp[:bot]][:emoji], text: temp[:line].chomp}
                 end
                 # STEP 0: Advance tick
                 @tick += 1
                 break if @tick >= @max_ticks
 
-                @protocol << { }
-                @protocol.last[:tick] = @tick
-                @protocol.last[:rng_state] = @rng.snapshot
-                # @protocol.last[:gems] = @gems
+                (0...@bots.size).each do |i|
+                    @protocol[i] << {}
+                    @protocol[i].last[:tick] = @tick
+                    @protocol[i].last[:rng_state] = @rng.snapshot
+                end
                 tf0 = Time.now.to_f
 
                 # STEP 1: Calculate signal levels at each tile
@@ -586,7 +586,7 @@ class Runner
                 # STEP 2: RENDER
                 if @verbose >= 2
                     screen = render(signal_level)
-                    @protocol.last[:screen] = screen
+                    # @protocol.last[:screen] = screen
                     print screen
                 end
                 t1 = Time.now.to_f
@@ -638,10 +638,10 @@ class Runner
                     end
 
                     @bots_io[i].stdin.puts(data.to_json)
-                    @protocol.last[:bots] ||= {}
-                    @protocol.last[:bots][:data] = data
+                    @protocol[i].last[:bots] ||= {}
+                    @protocol[i].last[:bots][:data] = data
                     line = @bots_io[i].stdout.gets.strip
-                    @protocol.last[:bots][:response] = line
+                    @protocol[i].last[:bots][:response] = line
                     command = line.split(' ').first
                     if ['N', 'E', 'S', 'W'].include?(command)
                         dir = {'N' => [0, -1], 'E' => [1, 0], 'S' => [0, 1], 'W' => [-1, 0]}
@@ -723,8 +723,10 @@ class Runner
             if @profile
                 results[i][:tile_coverage] = ((@tiles_revealed[i] & @floor_tiles_set).size.to_f / @floor_tiles_set.size.to_f * 100.0 * 100).to_i.to_f / 100
             end
+            if @check_determinism
+                results[i][:protocol_checksum] = Digest::SHA256.hexdigest(@protocol[i].to_json)
+            end
         end
-        # STDERR.puts @protocol.to_yaml
         results
     end
 end
@@ -753,6 +755,7 @@ options = {
     cache: false,
     emit_signals: false,
     profile: false,
+    check_determinism: false,
     use_docker: false,
     rounds: 1,
 }
@@ -765,7 +768,7 @@ GENERATORS = %w(arena divided eller icey cellular uniform digger rogue)
 stage_title = nil
 stage_key = nil
 OptionParser.new do |opts|
-    opts.banner = "Usage: ./runner.rb [options]"
+    opts.banner = "Usage: ./runner.rb [options] /path/to/bot1 [ /path/to/bot2 ]"
 
     opts.on('--stage STAGE', stages.keys,
         "Stage (default: #{options[:stage]})") do |x|
@@ -848,6 +851,9 @@ OptionParser.new do |opts|
             options[:verbose] = 0
         end
     end
+    opts.on("--[no-]check-determinism", "Check for deterministic behaviour and exit (default: #{options[:check_determinism]})") do |x|
+        options[:check_determinism] = x
+    end
     opts.on("-d", "--[no-]use-docker", "Use Docker to run bots (default: #{options[:use_docker]})") do |x|
         options[:use_docker] = x
     end
@@ -873,6 +879,36 @@ end
 if bot_paths.size > 2
     STDERR.puts "Error: At most two bots can compete."
     exit 1
+end
+
+if options[:check_determinism]
+    round_seed = Digest::SHA256.digest("#{options[:seed]}/check-determinism").unpack1('L<')
+    seed_rng = PCG32.new(round_seed)
+    seed = seed_rng.randrange(2 ** 32)
+    options[:verbose] = 0
+    bot_paths.each do |path|
+        STDERR.puts "Checking determinism of bot at #{path}..."
+        checksum = nil
+        2.times do
+            options[:seed] = seed
+            runner = Runner.new(**options)
+            runner.stage_title = stage_title if stage_title
+            runner.stage_key = stage_key if stage_key
+            runner.setup
+            runner.add_bot(path)
+            results = runner.run
+            if checksum.nil?
+                checksum = results[0][:protocol_checksum]
+            else
+                if checksum != results[0][:protocol_checksum]
+                    STDERR.puts "❌ Non-deterministic behaviour detected for bot at #{path}"
+                    exit(1)
+                end
+            end
+        end
+        STDERR.puts "✅ Bot at #{path} is likely deterministic."
+    end
+    exit(0)
 end
 
 if options[:rounds] == 1
