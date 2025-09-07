@@ -103,7 +103,7 @@ class Runner
                    vis_radius:, gem_spawn_rate:, gem_ttl:, max_gems:,
                    emit_signals:, signal_radius:, signal_quantization:,
                    signal_noise:, signal_cutoff:, signal_fade:, swap_bots:,
-                   verbose:, max_tps:, cache:, rounds:, profile:
+                   verbose:, max_tps:, cache:, rounds:, profile:, use_docker:
                    )
         @seed = seed
         @width = width
@@ -126,6 +126,7 @@ class Runner
         @cache = cache
         @rounds = rounds
         @profile = profile
+        @use_docker = use_docker
         @bots = []
         @bots_io = []
         @gems = []
@@ -228,7 +229,37 @@ class Runner
 
     def start_bot(_path, &block)
         path = File.join(File.expand_path(_path), Gem.win_platform? ? 'start.bat' : 'start.sh')
-        stdin, stdout, stderr, wait_thr = Open3.popen3(path, chdir: File.dirname(path))
+        if @use_docker
+            args = [
+                'docker',
+                'run',
+                '--rm',
+                '-i',
+                '--network=none',
+                '--read-only',
+                '--pids-limit=256',
+                '--memory=256m',
+                '--memory-swap=256m',
+                '--cpus=1',
+                '--cap-drop=ALL',
+                '--security-opt=no-new-privileges',
+                '-u', '1000:1000',
+                "-v", "#{File.dirname(path)}:/src:ro",
+                "--tmpfs", "/home/runner/.cache:rw,nosuid,nodev,noexec,size=64m",
+                "--tmpfs", "/home/runner/.local:rw,nosuid,nodev,noexec,size=64m",
+                "--tmpfs", "/home/runner/.dart-tool:rw,nosuid,nodev,noexec,size=64m",
+                "--tmpfs", "/home/runner/.dotnet:rw,nosuid,nodev,noexec,size=64m",
+                "--tmpfs", "/home/runner/.nuget:rw,nosuid,nodev,noexec,size=64m",
+                "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=64m",
+                "--tmpfs", "/app:rw,nosuid,nodev,exec,size=64m,uid=1000,gid=1000,mode=1777",
+                'hidden-gems-runner'
+            ]
+            # STDERR.puts args.join(' ')
+            # exit
+            stdin, stdout, stderr, wait_thr = Open3.popen3(*args)
+        else
+            stdin, stdout, stderr, wait_thr = Open3.popen3(path, chdir: File.dirname(path))
+        end
         stdin.sync = true
         stdout.sync = true
         stderr.sync = true
@@ -723,6 +754,7 @@ options = {
     rounds: 1,
     emit_signals: false,
     profile: false,
+    use_docker: false,
 }
 
 unless ARGV.include?('--stage')
@@ -824,6 +856,9 @@ OptionParser.new do |opts|
             options[:rounds] = 20
             options[:verbose] = 0
         end
+    end
+    opts.on("-d", "--[no-]docker", "Use Docker (default: #{options[:use_docker]})") do |x|
+        options[:use_docker] = x
     end
 end.parse!
 

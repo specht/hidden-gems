@@ -7,6 +7,7 @@ srand(1)
 first_tick = true
 
 loop do
+    a = []
     line = STDIN.readline
     data = JSON.parse(line)
     if first_tick
