@@ -97,6 +97,7 @@ class Runner
     Bot = Struct.new(:stdin, :stdout, :stderr, :wait_thr)
 
     attr_accessor :round, :stage_title, :stage_key
+    attr_reader :bots
 
     def initialize(seed:, width:, height:, generator:, max_ticks:,
                    vis_radius:, gem_spawn_rate:, gem_ttl:, max_gems:,
@@ -197,8 +198,6 @@ class Runner
                 end
             end
         end
-
-        @tiles_revealed = Set.new()
 
         @terminal_height, @terminal_width = $stdout.winsize
 
@@ -323,9 +322,11 @@ class Runner
         StringIO.open do |io|
             io.print "\033[H" if @verbose >= 2
 
-            status_line = sprintf("  Stage: #{@stage_key}  │  Maze: #{@generator.capitalize} (#{@width}x#{@height})  │  Seed: #{@seed.to_s(36)}  │  Tick: %#{(@max_ticks - 1).to_s.size}d  │  Score: #{@bots[0][:score]}", @tick)
+            score_s = @bots.map { |x| "#{x[:emoji]} #{x[:score]}" }.join(' : ')
+
+            status_line = sprintf("  Stage: #{@stage_key}  │  Seed: #{@seed.to_s(36)}  │  Tick: %#{(@max_ticks - 1).to_s.size}d  │  Score: #{score_s}", @tick)
             status_line = status_line[0, @terminal_width] if status_line.size > @terminal_width
-            status_line = status_line + ' ' * (@terminal_width - status_line.size)
+            status_line = status_line + ' ' * (@terminal_width - vwidth(status_line))
 
             io.puts Paint[status_line, UI_FOREGROUND, UI_BACKGROUND]
 
@@ -369,7 +370,7 @@ class Runner
                             end
                         end
                     end
-                    unless @tiles_revealed.include?((y << 16) | x)
+                    unless @tiles_revealed.any? { |s| s.include?((y << 16) | x) }
                         bg = mix_rgb_hex(bg, '#000000', 0.5)
                     end
                     io.print Paint[c, nil, bg]
@@ -415,7 +416,7 @@ class Runner
         @gems.each do |gem|
             candidate_tiles.delete((gem[:position][1] << 16) | gem[:position][0])
         end
-        return 0 if candidate_tiles.empty?
+        return if candidate_tiles.empty?
         gem = {:position_offset => @rng.sample(candidate_tiles.to_a), :ttl => @gem_ttl}
         gem[:position] = [gem[:position_offset] & 0xFFFF, gem[:position_offset] >> 16]
 
@@ -453,7 +454,6 @@ class Runner
         gem[:level] = level
 
         @gems << gem
-        return @gem_ttl
     end
 
     def run
@@ -469,8 +469,13 @@ class Runner
         @tps = 0
         t0 = Time.now.to_f
         STDIN.echo = false
-        first_capture = nil
-        spawned_ttl = 0
+        results = @bots.map do |b|
+             { :ticks_to_first_capture => nil }
+        end
+        @tiles_revealed = @bots.map do |b|
+            Set.new()
+        end
+
         @protocol = []
         @chatlog << {emoji: ANNOUNCER_EMOJI, text: "Welcome to Hidden Gems!" }
         @chatlog << {emoji: ANNOUNCER_EMOJI, text: "Today's stage is #{@stage_title} (v#{@stage_key.split('@').last})" }
@@ -480,8 +485,9 @@ class Runner
         else
             @chatlog << {emoji: ANNOUNCER_EMOJI, text: "Two bots enter the maze:" }
         end
+        comments = @rng.shuffle!(COMMENT_SINGLE)
         @bots.each.with_index do |bot, i|
-            @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{bot[:emoji]} #{bot[:name]}: #{@rng.sample(COMMENT_SINGLE)}" }
+            @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{bot[:name]} #{bot[:emoji]} -- #{comments.shift}" }
         end
         if @bots.size > 1
             @chatlog << {emoji: ANNOUNCER_EMOJI, text: @rng.sample(COMMENT_VERSUS) }
@@ -539,10 +545,10 @@ class Runner
                     end
                 end
 
-                @bots.each do |bot|
+                @bots.each.with_index do |bot, i|
                     bot_position = bot[:position]
                     @visibility[(bot_position[1] << 16) | bot_position[0]].each do |t|
-                        @tiles_revealed << t
+                        @tiles_revealed[i] << t
                     end
                 end
 
@@ -568,7 +574,7 @@ class Runner
                     data = {}
                     if @tick == 0
                         data[:config] = {}
-                        %w(width height generator max_ticks vis_radius max_gems
+                        %w(stage_key width height generator max_ticks emit_signals vis_radius max_gems
                         gem_spawn_rate gem_ttl signal_radius signal_cutoff signal_noise
                         signal_quantization signal_fade).each do |key|
                             data[:config][key.to_sym] = instance_variable_get("@#{key}")
@@ -638,7 +644,7 @@ class Runner
                         if bot[:position] == gem[:position]
                             collected_gems << i
                             bot[:score] += gem[:ttl]
-                            first_capture ||= @tick
+                            ticks_to_first_capture ||= @tick
                             @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{bot[:name]} scored a gem with #{gem[:ttl]} points!" }
                         end
                     end
@@ -654,7 +660,7 @@ class Runner
                 end
 
                 if @rng.next_float() < @gem_spawn_rate && @gems.size < @max_gems
-                    spawned_ttl += add_gem()
+                    add_gem()
                 end
                 STDIN.raw do |stdin|
                     if IO.select([STDIN], nil, nil, 0)
@@ -681,17 +687,14 @@ class Runner
         else
             print "\rFinished round #{@round + 1} of #{@rounds}..."
         end
-        result = {}
-        result[:score] = @bots.first[:score]
-        if @profile
-            result[:tile_coverage] = ((@tiles_revealed & @floor_tiles_set).size.to_f / @floor_tiles_set.size.to_f * 100.0 * 100).to_i.to_f / 100
-            result[:ticks_to_first_capture] = first_capture
-            if spawned_ttl > 0
-                result[:gem_utilization] = (@bots.first[:score].to_f / spawned_ttl * 100.0 * 100).to_i.to_f / 100
+        @bots.each.with_index do |bot, i|
+            results[i][:score] = bot[:score]
+            if @profile
+                results[i][:tile_coverage] = ((@tiles_revealed[i] & @floor_tiles_set).size.to_f / @floor_tiles_set.size.to_f * 100.0 * 100).to_i.to_f / 100
             end
         end
         # STDERR.puts @protocol.to_yaml
-        result
+        results
     end
 end
 
@@ -847,9 +850,12 @@ if options[:rounds] == 1
 else
     round_seed = Digest::SHA256.digest("#{options[:seed]}/rounds").unpack1('L<')
     seed_rng = PCG32.new(round_seed)
-    all_bu = []
-    all_ttfc = []
-    all_tc = []
+    all_score = bot_paths.map { [] }
+    all_ttfc = bot_paths.map { [] }
+    all_tc = bot_paths.map { [] }
+
+    bot_data = []
+
     options[:rounds].times do |i|
         options[:seed] = seed_rng.randrange(2 ** 32)
         runner = Runner.new(**options)
@@ -858,24 +864,32 @@ else
         runner.stage_key = stage_key if stage_key
         runner.setup
         bot_paths.each { |path| runner.add_bot(path) }
-        result = runner.run
-        gem_utilization = result[:gem_utilization]
-        ticks_to_first_capture = result[:ticks_to_first_capture]
-        tile_coverage = result[:tile_coverage]
-        all_bu << gem_utilization if gem_utilization
-        all_ttfc << ticks_to_first_capture if ticks_to_first_capture
-        all_tc << tile_coverage
-        # STDERR.puts result.to_json
+        if i == 0
+            runner.bots.each.with_index do |bot, k|
+                bot_data << {:name => bot[:name], :emoji => bot[:emoji]}
+            end
+        end
+        results = runner.run
+        (0...bot_paths.size).each do |k|
+            all_score[k] << results[k][:score]
+            all_ttfc[k] << results[k][:ticks_to_first_capture] if results[k][:ticks_to_first_capture]
+            all_tc[k] << results[k][:tile_coverage]
+        end
     end
     puts
-    n     = all_bu.size
-    mean  = all_bu.sum(0.0) / n
-    var   = all_bu.map { |x| (x - mean)**2 }.sum / n
-    sd    = Math.sqrt(var)
-    cv    = sd / mean * 100.0
-    puts sprintf("Gem Utilization      : %5.1f %%", mean)
-    puts sprintf("Relative Instability : %5.1f %%", cv)
-    puts sprintf("Time to First Capture: %5.1f ticks", median(all_ttfc))
-    puts sprintf("Capture Rate         : %5.1f %%", all_bu.size.to_f * 100 / options[:rounds])
-    puts sprintf("Floor Tile Coverage  : %5.1f %%", mean(all_tc))
+
+    bot_data.each.with_index do |data, i|
+        puts "Results for #{data[:emoji]} #{data[:name]}"
+        n     = all_score[i].size
+        mean  = all_score[i].sum(0.0) / n
+        var   = all_score[i].map { |x| (x - mean) ** 2 }.sum / n
+        sd    = Math.sqrt(var)
+        cv    = sd / mean * 100.0
+        puts sprintf("Total Score          : %d", all_score[i].sum)
+        puts sprintf("Mean Score           : %5.1f", mean)
+        puts sprintf("Relative Instability : %5.1f %%", cv)
+        # puts sprintf("Time to First Capture: %5.1f ticks", median(all_ttfc[i]))
+        # puts sprintf("Capture Rate         : %5.1f %%", all_bu.size.to_f * 100 / options[:rounds])
+        puts sprintf("Floor Tile Coverage  : %5.1f %%", mean(all_tc[i]))
+    end
 end
