@@ -1,3 +1,4 @@
 #!/bin/sh
 set -e
-make run
+javac -cp json.jar Bot.java
+exec java -cp .:json.jar Bot
