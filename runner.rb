@@ -104,7 +104,7 @@ class Runner
                    emit_signals:, signal_radius:, signal_quantization:,
                    signal_noise:, signal_cutoff:, signal_fade:, swap_bots:,
                    cache:, profile:, check_determinism:, use_docker:,
-                   rounds:, verbose:, max_tps:
+                   rounds:, verbose:, max_tps:, announcer_enabled:
                    )
         @seed = seed
         @width = width
@@ -135,6 +135,7 @@ class Runner
         @chatlog = []
         @stage_title = '(no stage)'
         @stage_key = '(no stage)'
+        @announcer_enabled = announcer_enabled
     end
 
     def gen_maze
@@ -514,7 +515,7 @@ class Runner
         @protocol = @bots.map { |b| [] }
         @chatlog << {emoji: ANNOUNCER_EMOJI, text: "Welcome to Hidden Gems!" }
         @chatlog << {emoji: ANNOUNCER_EMOJI, text: "Today's stage is #{@stage_title} (v#{@stage_key.split('@').last})" }
-        # @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@generator.capitalize} @ #{@width}x#{@height} with seed #{@seed.to_s(36)}" }
+        @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@generator.capitalize} @ #{@width}x#{@height} with seed #{@seed.to_s(36)}" }
         if @bots.size == 1
             @chatlog << {emoji: ANNOUNCER_EMOJI, text: "All eyes on our lone contestant:" }
         else
@@ -678,7 +679,9 @@ class Runner
                             collected_gems << i
                             bot[:score] += gem[:ttl]
                             ticks_to_first_capture ||= @tick
+                            if @announcer_enabled
                             @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{bot[:name]} scored a gem with #{gem[:ttl]} points!" }
+                            end
                         end
                     end
                 end
@@ -713,7 +716,7 @@ class Runner
             STDIN.echo = true
         end
         if @verbose == 1
-            puts
+            puts 
         end
         if @rounds == 1
             puts "Seed: #{@seed.to_s(36)} / Score: #{@bots.map { |x| x[:score]}.join(' / ')}"
@@ -761,6 +764,7 @@ options = {
     check_determinism: false,
     use_docker: false,
     rounds: 1,
+    announcer_enabled: false,
 }
 
 unless ARGV.include?('--stage')
