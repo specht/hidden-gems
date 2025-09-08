@@ -772,7 +772,7 @@ stage_title = nil
 stage_key = nil
 write_profile_json_path = nil
 OptionParser.new do |opts|
-    opts.banner = "Usage: ./runner.rb [options] /path/to/bot1 [ /path/to/bot2 ]"
+    opts.banner = "Usage: ./runner.rb [options] /path/to/bot1 [/path/to/bot2]"
 
     opts.on('--stage STAGE', stages.keys,
         "Stage (default: #{options[:stage]})") do |x|
@@ -809,7 +809,7 @@ OptionParser.new do |opts|
         "Arena generator (default: #{options[:generator]})") do |x|
         options[:generator] = x
     end
-    opts.on("-tTICKS", "--ticks TICKS", Integer, "Number of ticks (default: #{options[:ticks]})") do |x|
+    opts.on("-tTICKS", "--ticks TICKS", Integer, "Number of ticks (default: #{options[:max_ticks]})") do |x|
         options[:max_ticks] = x
     end
     opts.on("--vis-radius RADIUS", Integer, "Visibility radius (default: #{options[:vis_radius]})") do |x|
