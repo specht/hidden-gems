@@ -1,4 +1,6 @@
 $first = $true
+$rng = [System.Random]::new(1)   # fixed seed = deterministic sequence
+
 while ($line = [Console]::In.ReadLine()) {
   try { $data = $line | ConvertFrom-Json } catch { $data = $null }
   if ($first -and $data -and $data.config) {
@@ -8,6 +10,6 @@ while ($line = [Console]::In.ReadLine()) {
     $first = $false
   }
   $moves = @("N","S","E","W")
-  $idx = Get-Random -Minimum 0 -Maximum 4
+  $idx = $rng.Next(0,4)          # use our seeded generator
   Write-Output $moves[$idx]
 }
