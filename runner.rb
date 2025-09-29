@@ -727,6 +727,9 @@ class Runner
                 results[i][:tile_coverage] = ((@tiles_revealed[i] & @floor_tiles_set).size.to_f / @floor_tiles_set.size.to_f * 100.0 * 100).to_i.to_f / 100
             end
             if @check_determinism
+                File.open("#{Time.now.to_i}-bot#{i}-protocol.json", 'w') do |f|
+                    f.puts @protocol[i].to_json
+                end
                 results[i][:protocol_checksum] = Digest::SHA256.hexdigest(@protocol[i].to_json)
             end
         end

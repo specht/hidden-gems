@@ -9,6 +9,5 @@ fi
 
 # Build in Release mode
 dotnet build -c Release
-
-# Run the compiled DLL
-exec dotnet bin/Release/net9.0/RandomWalker.dll
+dotnet publish -c Release -r linux-x64 --self-contained true
+./bin/Release/net9.0/linux-x64/publish/RandomWalker
