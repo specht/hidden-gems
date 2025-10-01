@@ -985,6 +985,13 @@ else
                 report[:gem_utilization_mean] = mean
                 report[:gem_utilization_cv] = cv
                 report[:floor_coverage_mean] = mean(all_tc[i])
+                report[:rounds] = all_score.map.with_index do |_, i|
+                    {
+                        :score => all_score[i],
+                        :gem_utilization => all_utilization[i],
+                        :floor_coverage => all_tc[i]
+                    }
+                end
                 f.write(report.to_json)
             end
         end
