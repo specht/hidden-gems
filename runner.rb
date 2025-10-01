@@ -987,9 +987,9 @@ else
                 report[:gem_utilization_mean] = mean
                 report[:gem_utilization_cv] = cv
                 report[:floor_coverage_mean] = mean(all_tc[i])
-                report[:rounds] = all_score.map.with_index do |_, k|
+                report[:rounds] = all_score[i].map.with_index do |_, k|
                     {
-                        :seed => all_seed[k],
+                        :seed => all_seed[k].to_s(36),
                         :score => all_score[i][k],
                         :gem_utilization => all_utilization[i][k],
                         :floor_coverage => all_tc[i][k]
