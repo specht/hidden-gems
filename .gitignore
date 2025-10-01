@@ -8,3 +8,4 @@ random-walker/cs/obj/
 random-walker/csharp/RandomWalker.csproj
 random-walker/csharp/bin/
 random-walker/csharp/obj/
+templates/*
