@@ -934,11 +934,13 @@ else
     all_utilization = bot_paths.map { [] }
     all_ttfc = bot_paths.map { [] }
     all_tc = bot_paths.map { [] }
+    all_seed = []
 
     bot_data = []
 
     options[:rounds].times do |i|
         options[:seed] = seed_rng.randrange(2 ** 32)
+        all_seed << options[:seed]
         runner = Runner.new(**options)
         runner.round = i
         runner.stage_title = stage_title if stage_title
@@ -987,6 +989,7 @@ else
                 report[:floor_coverage_mean] = mean(all_tc[i])
                 report[:rounds] = all_score.map.with_index do |_, i|
                     {
+                        :seed => all_seed[i],
                         :score => all_score[i],
                         :gem_utilization => all_utilization[i],
                         :floor_coverage => all_tc[i]
