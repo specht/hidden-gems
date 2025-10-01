@@ -513,21 +513,23 @@ class Runner
         ttl_spawned = 0
 
         @protocol = @bots.map { |b| [] }
-        @chatlog << {emoji: ANNOUNCER_EMOJI, text: "Welcome to Hidden Gems!" }
-        @chatlog << {emoji: ANNOUNCER_EMOJI, text: "Today's stage is #{@stage_title} (v#{@stage_key.split('@').last})" }
-        @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@generator.capitalize} @ #{@width}x#{@height} with seed #{@seed.to_s(36)}" }
-        if @bots.size == 1
-            @chatlog << {emoji: ANNOUNCER_EMOJI, text: "All eyes on our lone contestant:" }
-        else
-            @chatlog << {emoji: ANNOUNCER_EMOJI, text: "Two bots enter the maze:" }
-        end
-        comments = COMMENT_SINGLE.dup
-        @rng.shuffle!(comments)
-        @bots.each.with_index do |bot, i|
-            @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{bot[:name]} #{bot[:emoji]} -- #{comments.shift}" }
-        end
-        if @bots.size > 1
-            @chatlog << {emoji: ANNOUNCER_EMOJI, text: @rng.sample(COMMENT_VERSUS) }
+        if @announcer_enabled
+            @chatlog << {emoji: ANNOUNCER_EMOJI, text: "Welcome to Hidden Gems!" }
+            @chatlog << {emoji: ANNOUNCER_EMOJI, text: "Today's stage is #{@stage_title} (v#{@stage_key.split('@').last})" }
+            @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@generator.capitalize} @ #{@width}x#{@height} with seed #{@seed.to_s(36)}" }
+            if @bots.size == 1
+                @chatlog << {emoji: ANNOUNCER_EMOJI, text: "All eyes on our lone contestant:" }
+            else
+                @chatlog << {emoji: ANNOUNCER_EMOJI, text: "Two bots enter the maze:" }
+            end
+            comments = COMMENT_SINGLE.dup
+            @rng.shuffle!(comments)
+            @bots.each.with_index do |bot, i|
+                @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{bot[:name]} #{bot[:emoji]} -- #{comments.shift}" }
+            end
+            if @bots.size > 1
+                @chatlog << {emoji: ANNOUNCER_EMOJI, text: @rng.sample(COMMENT_VERSUS) }
+            end
         end
         begin
             print "\033[?25l" if @verbose >= 2
@@ -680,7 +682,7 @@ class Runner
                             bot[:score] += gem[:ttl]
                             ticks_to_first_capture ||= @tick
                             if @announcer_enabled
-                            @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{bot[:name]} scored a gem with #{gem[:ttl]} points!" }
+                                @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{bot[:name]} scored a gem with #{gem[:ttl]} points!" }
                             end
                         end
                     end
@@ -764,7 +766,7 @@ options = {
     check_determinism: false,
     use_docker: false,
     rounds: 1,
-    announcer_enabled: false,
+    announcer_enabled: true,
 }
 
 unless ARGV.include?('--stage')
