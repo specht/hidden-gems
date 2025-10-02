@@ -20,6 +20,10 @@ require 'unicode/display_width'
 require 'yaml'
 require 'zlib'
 
+SOFT_LIMIT      = 0.100
+HARD_LIMIT      = 0.200
+OVERTIME_BUDGET = 1.5
+
 def median(array)
     return nil if array.empty?
     sorted = array.sort
@@ -383,6 +387,7 @@ class Runner
                         bg = mix_rgb_hex(WALL_COLOR, '#000000', paint_rng.next_float() * 0.25)
                     end
                     @bots.each.with_index do |bot, i|
+                        next if bot[:disqualified_for]
                         p = bot[:position]
                         if p[0] == x && p[1] == y
                             c = @bots[i][:emoji]
@@ -425,18 +430,19 @@ class Runner
     end
 
     def add_bot(path)
-        @bots << {:position => @spawn_points.shift, :score => 0, :name => "Botty McBotface", :emoji => '🤖'}
+        @bots << {:position => @spawn_points.shift, :score => 0, :name => "Botty McBotface", :emoji => '🤖', :overtime_used => 0.0, :disqualified_for => nil, :stderr_lines => []}
         yaml_path = File.join(File.expand_path(path), 'bot.yaml')
         if File.exist?(yaml_path)
             info = YAML.load(File.read(yaml_path))
             @bots.last[:name] = info['name'] if info['name'].is_a?(String)
             @bots.last[:emoji] = info['emoji'] if info['emoji'].is_a?(String)
+            if vwidth(@bots.last[:emoji]) > 2
+                raise "Error in bot.yaml: emoji must be at most 2 characters wide (#{@bots.last[:emoji]} is #{vwidth(@bots.last[:emoji])} characters wide)"
+            end
         end
         bot_index = @bots_io.size
         @bots_io << start_bot(path) do |line|
-            if @verbose >= 2
-                @message_queue << {:bot => bot_index, :line => line}
-            end
+            @message_queue << {:bot => bot_index, :line => line}
         end
     end
 
@@ -491,6 +497,29 @@ class Runner
         return gem[:ttl]
     end
 
+    def read_line_before_deadline(io, deadline_mono)
+        buf = +""
+        loop do
+            now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+            remaining = deadline_mono - now
+            return [:hard_timeout, nil] if remaining <= 0
+
+            begin
+                chunk = io.read_nonblock(4096)
+                return [:eof, nil] if chunk.nil?
+                buf << chunk
+                if (idx = buf.index("\n"))
+                    return [:ok, buf[0..idx].strip]
+                end
+            rescue IO::WaitReadable
+                ready = IO.select([io], nil, nil, remaining)
+                return [:hard_timeout, nil] unless ready
+            rescue EOFError
+                return [:eof, nil]
+            end
+        end
+    end
+
     def run
         trap("INT") do
             @bots_io.each { |b| b.stdin.close rescue nil }
@@ -538,6 +567,7 @@ class Runner
                     temp = @message_queue.pop(true) rescue nil
                     next if temp.nil?
                     @chatlog << {emoji: @bots[temp[:bot]][:emoji], text: temp[:line].chomp}
+                    @bots[temp[:bot]][:stderr_lines] << temp[:line].chomp
                 end
                 # STEP 0: Advance tick
                 @tick += 1
@@ -600,11 +630,14 @@ class Runner
                     print "\rTick: #{@tick} @ #{@tps} tps"
                 end
 
+                break if @bots.all? { |b| b[:disqualified_for] }
+
                 bot_with_initiative = ((@tick + (@swap_bots ? 1 : 0)) % @bots.size)
 
                 # STEP 3: QUERY BOTS: send data, get response, move but don't collect
 
                 @bots.each.with_index do |bot, i|
+                    next if bot[:disqualified_for]
                     bot_position = bot[:position]
 
                     data = {}
@@ -642,24 +675,72 @@ class Runner
                         data[:signal_level] = format("%.6f", level_sum).to_f
                     end
 
-                    @bots_io[i].stdin.puts(data.to_json)
-                    @protocol[i].last[:bots] ||= {}
-                    @protocol[i].last[:bots][:data] = data
-                    line = @bots_io[i].stdout.gets.strip
-                    @protocol[i].last[:bots][:response] = line
-                    command = line.split(' ').first
-                    if ['N', 'E', 'S', 'W'].include?(command)
-                        dir = {'N' => [0, -1], 'E' => [1, 0], 'S' => [0, 1], 'W' => [-1, 0]}
-                        dx = bot_position[0] + dir[command][0]
-                        dy = bot_position[1] + dir[command][1]
-                        if dx >= 0 && dy >= 0 && dx < @width && dy < @height
-                            unless @maze.include?((dy << 16) | dx)
-                                @bots[i][:position] = [dx, dy]
+                    start_mono = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+                    deadline_mono = start_mono + HARD_LIMIT
+
+                    begin
+                        @bots_io[i].stdin.puts(data.to_json)
+                    rescue Errno::EPIPE
+                        # bot has terminated unexpectedly
+                        if @bots[i][:disqualified_for].nil?
+                            @bots[i][:disqualified_for] = 'terminated_unexpectedly'
+                            if @announcer_enabled
+                                @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{bot[:name]} has terminated unexpectedly!" }
                             end
                         end
-                    elsif command == 'WAIT'
-                    else
-                        # invalid command!
+                    end
+
+                    @bots_io[i].stdin.flush
+                    @protocol[i].last[:bots] ||= {}
+                    @protocol[i].last[:bots][:data] = data
+
+                    # line = @bots_io[i].stdout.gets.strip
+                    status, line = read_line_before_deadline(@bots_io[i].stdout, deadline_mono)
+                    elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - start_mono
+                    if status == :hard_timeout
+                        if @bots[i][:disqualified_for].nil?
+                            @bots[i][:disqualified_for] = 'hard_timeout'
+                            if @announcer_enabled
+                                @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{bot[:name]} took too long to respond (#{(elapsed * 1000).to_i} ms) and has been terminated!" }
+                            end
+                        end
+                    elsif status == :eof
+                        if @bots[i][:disqualified_for].nil?
+                            @bots[i][:disqualified_for] = 'terminated_unexpectedly'
+                            if @announcer_enabled
+                                @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{bot[:name]} has terminated unexpectedly!" }
+                            end
+                        end
+                    elsif status == :ok
+                        overtime = elapsed - SOFT_LIMIT
+                        @bots[i][:overtime_used] += overtime if overtime > 0.0
+                        if @announcer_enabled && overtime > 0.0
+                            @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{bot[:name]} exceeded soft limit by #{(overtime * 1e3).to_i} ms (total overtime: #{(@bots[i][:overtime_used] * 1e3).to_i} ms)" }
+                        end
+                        if @bots[i][:overtime_used] > OVERTIME_BUDGET
+                            if @bots[i][:disqualified_for].nil?
+                                @bots[i][:disqualified_for] = 'overtime_budget_exceeded'
+                                if @announcer_enabled
+                                    @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{bot[:name]} has exceeded their overtime budget and is disqualified!" }
+                                end
+                            end
+                        end
+
+                        @protocol[i].last[:bots][:response] = line
+                        command = line.split(' ').first
+                        if ['N', 'E', 'S', 'W'].include?(command)
+                            dir = {'N' => [0, -1], 'E' => [1, 0], 'S' => [0, 1], 'W' => [-1, 0]}
+                            dx = bot_position[0] + dir[command][0]
+                            dy = bot_position[1] + dir[command][1]
+                            if dx >= 0 && dy >= 0 && dx < @width && dy < @height
+                                unless @maze.include?((dy << 16) | dx)
+                                    @bots[i][:position] = [dx, dy]
+                                end
+                            end
+                        elsif command == 'WAIT'
+                        else
+                            # invalid command!
+                        end
                     end
                 end
 
@@ -675,12 +756,13 @@ class Runner
                 collected_gems = []
                 @gems.each.with_index do |gem, i|
                     (0...@bots.size).each do |_k|
+                        next if @bots[_k][:disqualified_for]
                         k = (_k + bot_with_initiative) % @bots.size
                         bot = @bots[k]
                         if bot[:position] == gem[:position]
                             collected_gems << i
                             bot[:score] += gem[:ttl]
-                            ticks_to_first_capture ||= @tick
+                            results[k][:ticks_to_first_capture] ||= @tick
                             if @announcer_enabled
                                 @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{bot[:name]} scored a gem with #{gem[:ttl]} points!" }
                             end
@@ -711,14 +793,24 @@ class Runner
                 end
             end
             @bots_io.each do |b|
-                Process.kill(Gem.win_platform? ? "KILL" : "TERM", b.wait_thr.pid)
+                begin
+                    Process.kill(Gem.win_platform? ? "KILL" : "TERM", b.wait_thr.pid)
+                rescue Errno::ESRCH
+                end
             end
         ensure
             print "\033[?25h" if @verbose >= 2
             STDIN.echo = true
         end
+        # if a bot was disqualified, set their score to 0
+        @bots.each do |bot|
+            if bot[:disqualified_for]
+                bot[:score] = 0
+            end
+        end
+
         if @verbose == 1
-            puts 
+            puts
         end
         if @rounds == 1
             puts "Seed: #{@seed.to_s(36)} / Score: #{@bots.map { |x| x[:score]}.join(' / ')}"
@@ -727,6 +819,8 @@ class Runner
         end
         @bots.each.with_index do |bot, i|
             results[i][:score] = bot[:score]
+            results[i][:disqualified_for] = bot[:disqualified_for]
+            results[i][:stderr_lines] = bot[:stderr_lines]
             if @profile
                 results[i][:gem_utilization] = (ttl_spawned > 0 ? (bot[:score].to_f / ttl_spawned.to_f * 100.0 * 100).to_i.to_f / 100 : 0.0)
                 results[i][:tile_coverage] = ((@tiles_revealed[i] & @floor_tiles_set).size.to_f / @floor_tiles_set.size.to_f * 100.0 * 100).to_i.to_f / 100
@@ -941,6 +1035,8 @@ else
     all_ttfc = bot_paths.map { [] }
     all_tc = bot_paths.map { [] }
     all_seed = []
+    all_disqualified_for = bot_paths.map { [] }
+    all_stderr_lines = bot_paths.map { [] }
 
     bot_data = []
 
@@ -962,12 +1058,15 @@ else
         (0...bot_paths.size).each do |k|
             all_score[k] << results[k][:score]
             all_utilization[k] << results[k][:gem_utilization]
-            all_ttfc[k] << results[k][:ticks_to_first_capture] if results[k][:ticks_to_first_capture]
+            all_ttfc[k] << results[k][:ticks_to_first_capture]
             all_tc[k] << results[k][:tile_coverage]
+            all_disqualified_for[k] << results[k][:disqualified_for]
+            all_stderr_lines[k] << results[k][:stderr_lines]
         end
     end
     puts
 
+    all_reports = []
     bot_data.each.with_index do |data, i|
         puts "Results for #{data[:emoji]} #{data[:name]}"
         n     = all_utilization[i].size
@@ -975,34 +1074,42 @@ else
         var   = all_utilization[i].map { |x| (x - mean) ** 2 }.sum / n
         sd    = Math.sqrt(var)
         cv    = sd / mean * 100.0
-        puts sprintf("Total Score     : %d", all_score[i].sum)
+        puts sprintf("Total Score     : %5d", all_score[i].sum)
         puts sprintf("Gem Utilization : %5.1f %%", mean)
-        puts sprintf("Chaos Factor    : %5.1f %%", cv)
+        if cv.nan?
+            puts sprintf("Chaos Factor    :     -")
+        else
+            puts sprintf("Chaos Factor    : %5.1f %%", cv)
+        end
         puts sprintf("Floor Coverage  : %5.1f %%", mean(all_tc[i]))
-        if write_profile_json_path
-            File.open(write_profile_json_path, 'w') do |f|
-                report = {}
-                report[:timestamp] = Time.now.to_i
-                report[:stage_key] = stage_key
-                report[:stage_title] = stage_title
-                report[:git_hash] = `git describe --always --dirty`.strip
-                report[:seed] = og_seed.to_s(36)
-                report[:name] = data[:name]
-                report[:emoji] = data[:emoji]
-                report[:total_score] = all_score[i].sum
-                report[:gem_utilization_mean] = mean
-                report[:gem_utilization_cv] = cv
-                report[:floor_coverage_mean] = mean(all_tc[i])
-                report[:rounds] = all_score[i].map.with_index do |_, k|
-                    {
-                        :seed => all_seed[k].to_s(36),
-                        :score => all_score[i][k],
-                        :gem_utilization => all_utilization[i][k],
-                        :floor_coverage => all_tc[i][k]
-                    }
-                end
-                f.write(report.to_json)
-            end
+        report = {}
+        report[:timestamp] = Time.now.to_i
+        report[:stage_key] = stage_key
+        report[:stage_title] = stage_title
+        report[:git_hash] = `git describe --always --dirty`.strip
+        report[:seed] = og_seed.to_s(36)
+        report[:name] = data[:name]
+        report[:emoji] = data[:emoji]
+        report[:total_score] = all_score[i].sum
+        report[:gem_utilization_mean] = mean
+        report[:gem_utilization_cv] = cv.nan? ? nil : cv
+        report[:floor_coverage_mean] = mean(all_tc[i])
+        report[:rounds] = all_score[i].map.with_index do |_, k|
+            {
+                :seed => all_seed[k].to_s(36),
+                :score => all_score[i][k],
+                :gem_utilization => all_utilization[i][k],
+                :floor_coverage => all_tc[i][k],
+                :ticks_to_first_capture => all_ttfc[i][k],
+                :disqualified_for => all_disqualified_for[i][k],
+                :stderr_lines => all_stderr_lines[i][k],
+            }
+        end
+        all_reports << report
+    end
+    if write_profile_json_path
+        File.open(write_profile_json_path, 'w') do |f|
+            f.write(all_reports.to_json)
         end
     end
 end
