@@ -20,9 +20,10 @@ require 'unicode/display_width'
 require 'yaml'
 require 'zlib'
 
-SOFT_LIMIT      = 0.100
-HARD_LIMIT      = 0.200
-OVERTIME_BUDGET = 1.5
+SOFT_LIMIT            = 0.100
+HARD_LIMIT            = 0.200
+HARD_LIMIT_FIRST_TICK = 15.0
+OVERTIME_BUDGET       = 1.5
 
 def median(array)
     return nil if array.empty?
@@ -675,6 +676,9 @@ class Runner
                         data[:signal_level] = format("%.6f", level_sum).to_f
                     end
 
+                    start_mono = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+                    deadline_mono = start_mono + (@tick == 0 ? HARD_LIMIT_FIRST_TICK : HARD_LIMIT)
+
                     begin
                         @bots_io[i].stdin.puts(data.to_json)
                         @bots_io[i].stdin.flush
@@ -691,8 +695,6 @@ class Runner
                     @protocol[i].last[:bots] ||= {}
                     @protocol[i].last[:bots][:data] = data
 
-                    start_mono = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-                    deadline_mono = start_mono + HARD_LIMIT
                     # line = @bots_io[i].stdout.gets.strip
                     status, line = read_line_before_deadline(@bots_io[i].stdout, deadline_mono)
                     elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - start_mono
@@ -712,7 +714,7 @@ class Runner
                             end
                         end
                     elsif status == :ok
-                        overtime = elapsed - SOFT_LIMIT
+                        overtime = (@tick == 0) ? 0.0 : (elapsed - SOFT_LIMIT)
                         @bots[i][:overtime_used] += overtime if overtime > 0.0
                         if @announcer_enabled && overtime > 0.0
                             @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{bot[:name]} exceeded soft limit by #{(overtime * 1e3).to_i} ms (total overtime: #{(@bots[i][:overtime_used] * 1e3).to_i} ms)" }
