@@ -675,11 +675,9 @@ class Runner
                         data[:signal_level] = format("%.6f", level_sum).to_f
                     end
 
-                    start_mono = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-                    deadline_mono = start_mono + HARD_LIMIT
-
                     begin
                         @bots_io[i].stdin.puts(data.to_json)
+                        @bots_io[i].stdin.flush
                     rescue Errno::EPIPE
                         # bot has terminated unexpectedly
                         if @bots[i][:disqualified_for].nil?
@@ -690,13 +688,15 @@ class Runner
                         end
                     end
 
-                    @bots_io[i].stdin.flush
                     @protocol[i].last[:bots] ||= {}
                     @protocol[i].last[:bots][:data] = data
 
+                    start_mono = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+                    deadline_mono = start_mono + HARD_LIMIT
                     # line = @bots_io[i].stdout.gets.strip
                     status, line = read_line_before_deadline(@bots_io[i].stdout, deadline_mono)
                     elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - start_mono
+                    @chatlog << {emoji: ANNOUNCER_EMOJI, text: "status: #{status}, elapsed: #{elapsed}" }
                     if status == :hard_timeout
                         if @bots[i][:disqualified_for].nil?
                             @bots[i][:disqualified_for] = 'hard_timeout'
