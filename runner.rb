@@ -701,7 +701,7 @@ class Runner
                     @chatlog << {emoji: ANNOUNCER_EMOJI, text: "status: #{status}, elapsed: #{elapsed}" }
                     if status == :hard_timeout
                         if @bots[i][:disqualified_for].nil?
-                            @bots[i][:disqualified_for] = "hard_timeout (#{(elapsed * 1000).to_i} ms)"
+                            @bots[i][:disqualified_for] = "hard_timeout"
                             if @announcer_enabled
                                 @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{bot[:name]} took too long to respond (#{(elapsed * 1000).to_i} ms) and has been terminated!" }
                             end
