@@ -981,7 +981,7 @@ bot_paths = ARGV.map do |x|
 end
 
 if bot_paths.empty?
-    bot_paths << "random-walker/ruby"
+    bot_paths << "random-walker"
 end
 
 if bot_paths.size > 2
