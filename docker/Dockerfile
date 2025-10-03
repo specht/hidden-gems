@@ -17,6 +17,7 @@ RUN apt-get update \
       ruby-full bundler \
       nodejs npm \
       default-jdk \
+      rustc cargo \
       lua5.4 \
       libc6 libstdc++6 libgcc-s1 zlib1g libssl3 \
       rsync wget golang nodejs php \
