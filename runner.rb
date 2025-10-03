@@ -698,7 +698,6 @@ class Runner
                     # line = @bots_io[i].stdout.gets.strip
                     status, line = read_line_before_deadline(@bots_io[i].stdout, deadline_mono)
                     elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - start_mono
-                    @chatlog << {emoji: ANNOUNCER_EMOJI, text: "status: #{status}, elapsed: #{elapsed}" }
                     if status == :hard_timeout
                         if @bots[i][:disqualified_for].nil?
                             @bots[i][:disqualified_for] = "hard_timeout"
