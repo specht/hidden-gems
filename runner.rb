@@ -22,7 +22,7 @@ require 'zlib'
 
 SOFT_LIMIT            = 0.100
 HARD_LIMIT            = 0.200
-HARD_LIMIT_FIRST_TICK = 15.0
+HARD_LIMIT_FIRST_TICK = 20.0
 OVERTIME_BUDGET       = 1.5
 
 def median(array)
