@@ -17,7 +17,6 @@ RUN apt-get update \
       ruby-full bundler \
       nodejs npm \
       default-jdk \
-      rustc cargo \
       lua5.4 \
       libc6 libstdc++6 libgcc-s1 zlib1g libssl3 \
       rsync wget golang nodejs php \
@@ -37,9 +36,23 @@ RUN wget https://storage.googleapis.com/dart-archive/channels/stable/release/3.8
     && dpkg -i dart_3.8.2-1_amd64.deb \
     && rm dart_3.8.2-1_amd64.deb
 
-# Install .NET SDK
-RUN apt-get update \
-    && apt-get install -y dotnet-sdk-9.0
+# # Install .NET SDK
+# RUN apt-get update \
+#     && apt-get install -y dotnet-sdk-9.0
+
+# --- Julia (prebuilt, pinned) ---
+ARG JULIA_VERSION=1.11.7
+ENV JULIA_DEPOT_PATH=/usr/local/julia
+
+RUN set -eux; \
+    apt-get update && apt-get install -y --no-install-recommends ca-certificates curl xz-utils && rm -rf /var/lib/apt/lists/*; \
+    curl -fsSL "https://julialang-s3.julialang.org/bin/linux/x64/1.11/julia-${JULIA_VERSION}-linux-x86_64.tar.gz" \
+      -o /tmp/julia.tgz; \
+    tar -xzf /tmp/julia.tgz -C /opt; \
+    ln -s "/opt/julia-${JULIA_VERSION}/bin/julia" /usr/local/bin/julia; \
+    rm -f /tmp/julia.tgz; \
+    mkdir -p "$JULIA_DEPOT_PATH"; \
+    julia -e 'using Pkg; Pkg.add("JSON"); using JSON; Pkg.precompile()'
 
 RUN sed -i 's/# \(en_US.UTF-8 UTF-8\)/\1/' /etc/locale.gen \
  && locale-gen
@@ -50,8 +63,10 @@ RUN chmod +x /launch.sh
 ARG USER_ID=1000
 ARG GROUP_ID=1000
 RUN groupadd -g ${GROUP_ID} runner && useradd -m -u ${USER_ID} -g ${GROUP_ID} -s /bin/bash runner
+
 WORKDIR /app
 RUN chown -R runner:runner /app
+RUN chown -R runner:runner /usr/local/julia
 USER runner
 
 ENTRYPOINT ["/usr/bin/tini","--"]
