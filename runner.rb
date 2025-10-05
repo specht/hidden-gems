@@ -190,7 +190,13 @@ class Runner
             visibility_path = "cache/#{@checksum}.yaml.gz"
             if @cache && File.exist?(visibility_path)
                 Zlib::GzipReader.open(visibility_path) do |gz|
-                    @visibility = YAML.load(gz.read, permitted_classes: [Set])
+                    yaml = gz.read
+                    @visibility =
+                    begin
+                        YAML.safe_load(yaml, permitted_classes: [Set], aliases: true)
+                    rescue ArgumentError
+                        YAML.safe_load(yaml, [Set], [], true)
+                    end
                 end
             else
                 # pre-calculate visibility from each tile
