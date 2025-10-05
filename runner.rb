@@ -6,6 +6,7 @@ $LOAD_PATH.unshift File.expand_path("include/paint-2.3.0/lib", __dir__)
 
 require './include/fov_angle.rb'
 require './include/pcg32.rb'
+require './include/timings.rb'
 
 require 'digest'
 require 'fileutils'
@@ -24,6 +25,8 @@ SOFT_LIMIT            = 0.100
 HARD_LIMIT            = 0.200
 HARD_LIMIT_FIRST_TICK = 15.0
 OVERTIME_BUDGET       = 1.5
+
+$timings = Timings.new
 
 def median(array)
     return nil if array.empty?
@@ -109,7 +112,8 @@ class Runner
                    emit_signals:, signal_radius:, signal_quantization:,
                    signal_noise:, signal_cutoff:, signal_fade:, swap_bots:,
                    cache:, profile:, check_determinism:, use_docker:,
-                   rounds:, verbose:, max_tps:, announcer_enabled:
+                   rounds:, verbose:, max_tps:, announcer_enabled:,
+                   asciinema:, show_timings:
                    )
         @seed = seed
         @width = width
@@ -141,6 +145,8 @@ class Runner
         @stage_title = '(no stage)'
         @stage_key = '(no stage)'
         @announcer_enabled = announcer_enabled
+        @asciinema = asciinema
+        @show_timings = show_timings
     end
 
     def gen_maze
@@ -154,119 +160,129 @@ class Runner
     end
 
     def setup
-        @rng = PCG32.new(@seed)
-        @maze = gen_maze()
-        @floor_tiles = []
-        @checksum = Digest::SHA256.hexdigest(@maze.to_json)
-        (0...@height).each do |y|
-            (0...@width).each do |x|
-                offset = (y << 16) | x
-                unless @maze.include?(offset)
-                    @floor_tiles << offset
-                end
-            end
-        end
-        @rng.shuffle!(@floor_tiles)
-        @floor_tiles_set = Set.new(@floor_tiles)
-        @spawn_points = []
-        @spawn_points << @floor_tiles.shift
-        @spawn_points << @floor_tiles.shift
-        @spawn_points.map! do |offset|
-            [offset & 0xFFFF, offset >> 16]
-        end
-        if @swap_bots
-            @spawn_points.reverse!
-        end
-        @message_queue = Queue.new
-
-        visibility_path = "cache/#{@checksum}.yaml.gz"
-        if @cache && File.exist?(visibility_path)
-            Zlib::GzipReader.open(visibility_path) do |gz|
-                @visibility = YAML.load(gz.read, permitted_classes: [Set])
-            end
-        else
-            # pre-calculate visibility from each tile
-            @visibility = {}
+        $timings.profile("setup") do
+            @rng = PCG32.new(@seed)
+            @maze = gen_maze()
+            @floor_tiles = []
+            @checksum = Digest::SHA256.hexdigest(@maze.to_json)
             (0...@height).each do |y|
                 (0...@width).each do |x|
                     offset = (y << 16) | x
-                    v = Set.new()
                     unless @maze.include?(offset)
-                        visible = FOVAngle.visible(@width, @height, @maze, x, y, radius: @vis_radius) { |x, y| @maze.include?((y << 16) | x) }
-                        v = visible.to_a.map do |p|
-                            (p[1] << 16) | p[0]
-                        end.sort
+                        @floor_tiles << offset
                     end
-                    @visibility[offset] = Set.new(v)
                 end
             end
-            if @cache
-                FileUtils.mkpath(File.dirname(visibility_path))
-                Zlib::GzipWriter.open(visibility_path) do |gz|
-                    gz.write @visibility.to_yaml
+            @rng.shuffle!(@floor_tiles)
+            @floor_tiles_set = Set.new(@floor_tiles)
+            @spawn_points = []
+            @spawn_points << @floor_tiles.shift
+            @spawn_points << @floor_tiles.shift
+            @spawn_points.map! do |offset|
+                [offset & 0xFFFF, offset >> 16]
+            end
+            if @swap_bots
+                @spawn_points.reverse!
+            end
+            @message_queue = Queue.new
+
+            visibility_path = "cache/#{@checksum}.yaml.gz"
+            if @cache && File.exist?(visibility_path)
+                Zlib::GzipReader.open(visibility_path) do |gz|
+                    @visibility = YAML.load(gz.read, permitted_classes: [Set])
+                end
+            else
+                # pre-calculate visibility from each tile
+                @visibility = {}
+                (0...@height).each do |y|
+                    (0...@width).each do |x|
+                        offset = (y << 16) | x
+                        v = Set.new()
+                        unless @maze.include?(offset)
+                            visible = FOVAngle.visible(@width, @height, @maze, x, y, radius: @vis_radius) { |x, y| @maze.include?((y << 16) | x) }
+                            v = visible.to_a.map do |p|
+                                (p[1] << 16) | p[0]
+                            end.sort
+                        end
+                        @visibility[offset] = Set.new(v)
+                    end
+                end
+                if @cache
+                    FileUtils.mkpath(File.dirname(visibility_path))
+                    Zlib::GzipWriter.open(visibility_path) do |gz|
+                        gz.write @visibility.to_yaml
+                    end
                 end
             end
-        end
 
-        @terminal_height, @terminal_width = $stdout.winsize
+            @terminal_height, @terminal_width = $stdout.winsize
 
-        @tile_width = 2
+            @tile_width = 2
 
-        @enable_chatlog = false
-        @chatlog_position = nil
-        @chatlog_width = 0
-        @chatlog_height = 0
+            if @asciinema
+                @terminal_width = @width * @tile_width
+                @terminal_height = @height + 1
+            end
 
-        if @verbose >= 2
-            # There are two possible places for the chat log:
-            # - right side of the maze (if terminal is wide enough)
-            # - below the maze (if terminal is high enough)
-            if @terminal_width >= @width * @tile_width + 20
-                @enable_chatlog = true
-                @chatlog_position = :right
-                @chatlog_width = @terminal_width - @width * @tile_width - 2
-                @chatlog_height = @height
-            elsif @terminal_height >= @height + 11
-                @enable_chatlog = true
-                @chatlog_position = :bottom
-                @chatlog_width = @terminal_width - 1
-                @chatlog_height = @terminal_height - @height - 1
+            @enable_chatlog = false
+            @chatlog_position = nil
+            @chatlog_width = 0
+            @chatlog_height = 0
+
+            if @verbose >= 2 && !@asciinema
+                # There are two possible places for the chat log:
+                # - right side of the maze (if terminal is wide enough)
+                # - below the maze (if terminal is high enough)
+                if @terminal_width >= @width * @tile_width + 20
+                    @enable_chatlog = true
+                    @chatlog_position = :right
+                    @chatlog_width = @terminal_width - @width * @tile_width - 2
+                    @chatlog_height = @height
+                elsif @terminal_height >= @height + 11
+                    @enable_chatlog = true
+                    @chatlog_position = :bottom
+                    @chatlog_width = @terminal_width - 1
+                    @chatlog_height = @terminal_height - @height - 1
+                end
             end
         end
     end
 
     def start_bot(_path, &block)
         path = File.join(File.expand_path(_path), Gem.win_platform? ? 'start.bat' : 'start.sh')
-        if @use_docker
-            args = [
-                'docker',
-                'run',
-                '--rm',
-                '-i',
-                '--network=none',
-                '--read-only',
-                '--pids-limit=256',
-                '--memory=256m',
-                '--memory-swap=256m',
-                '--cpus=1',
-                '--cap-drop=ALL',
-                '--security-opt=no-new-privileges',
-                '-u', '1000:1000',
-                "-v", "#{File.dirname(path)}:/src:ro",
-                "--tmpfs", "/home/runner/.cache:rw,nosuid,nodev,noexec,size=64m",
-                "--tmpfs", "/home/runner/.local:rw,nosuid,nodev,noexec,size=64m",
-                "--tmpfs", "/home/runner/.dart-tool:rw,nosuid,nodev,noexec,size=64m",
-                "--tmpfs", "/home/runner/.dotnet:rw,nosuid,nodev,noexec,size=64m",
-                "--tmpfs", "/home/runner/.nuget:rw,nosuid,nodev,noexec,size=64m",
-                "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=64m",
-                "--tmpfs", "/app:rw,nosuid,nodev,exec,size=64m,uid=1000,gid=1000,mode=1777",
-                'hidden-gems-runner'
-            ]
-            # STDERR.puts args.join(' ')
-            # exit
-            stdin, stdout, stderr, wait_thr = Open3.popen3(*args)
-        else
-            stdin, stdout, stderr, wait_thr = Open3.popen3(path, chdir: File.dirname(path))
+        stdin, stdout, stderr, wait_thr = nil
+        $timings.profile("launch bot") do
+            if @use_docker
+                args = [
+                    'docker',
+                    'run',
+                    '--rm',
+                    '-i',
+                    '--network=none',
+                    '--read-only',
+                    '--pids-limit=256',
+                    '--memory=256m',
+                    '--memory-swap=256m',
+                    '--cpus=1',
+                    '--cap-drop=ALL',
+                    '--security-opt=no-new-privileges',
+                    '-u', '1000:1000',
+                    "-v", "#{File.dirname(path)}:/src:ro",
+                    "--tmpfs", "/home/runner/.cache:rw,nosuid,nodev,noexec,size=64m",
+                    "--tmpfs", "/home/runner/.local:rw,nosuid,nodev,noexec,size=64m",
+                    "--tmpfs", "/home/runner/.dart-tool:rw,nosuid,nodev,noexec,size=64m",
+                    "--tmpfs", "/home/runner/.dotnet:rw,nosuid,nodev,noexec,size=64m",
+                    "--tmpfs", "/home/runner/.nuget:rw,nosuid,nodev,noexec,size=64m",
+                    "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=64m",
+                    "--tmpfs", "/app:rw,nosuid,nodev,exec,size=64m,uid=1000,gid=1000,mode=1777",
+                    'hidden-gems-runner'
+                ]
+                # STDERR.puts args.join(' ')
+                # exit
+                stdin, stdout, stderr, wait_thr = Open3.popen3(*args)
+            else
+                stdin, stdout, stderr, wait_thr = Open3.popen3(path, chdir: File.dirname(path))
+            end
         end
         stdin.sync = true
         stdout.sync = true
@@ -419,7 +435,7 @@ class Runner
                     io.print ' '
                     io.print chat_lines[y]
                 end
-                io.puts
+                io.puts unless (@asciinema && (y == @height - 1))
             end
             if @enable_chatlog && @chatlog_position == :bottom
                 chat_lines.each do |line|
@@ -642,52 +658,56 @@ class Runner
                     bot_position = bot[:position]
 
                     data = {}
-                    if @tick == 0
-                        data[:config] = {}
-                        %w(stage_key width height generator max_ticks emit_signals vis_radius max_gems
-                        gem_spawn_rate gem_ttl signal_radius signal_cutoff signal_noise
-                        signal_quantization signal_fade).each do |key|
-                            data[:config][key.to_sym] = instance_variable_get("@#{key}")
+                    $timings.profile("prepare data") do
+                        if @tick == 0
+                            data[:config] = {}
+                            %w(stage_key width height generator max_ticks emit_signals vis_radius max_gems
+                            gem_spawn_rate gem_ttl signal_radius signal_cutoff signal_noise
+                            signal_quantization signal_fade).each do |key|
+                                data[:config][key.to_sym] = instance_variable_get("@#{key}")
+                            end
+                            bot_seed = Digest::SHA256.digest("#{@seed}/bot").unpack1('L<')
+                            data[:config][:bot_seed] = bot_seed
                         end
-                        bot_seed = Digest::SHA256.digest("#{@seed}/bot").unpack1('L<')
-                        data[:config][:bot_seed] = bot_seed
-                    end
-                    data[:tick] = @tick
-                    data[:bot] = bot_position
-                    data[:wall] = []
-                    data[:floor] = []
-                    data[:initiative] = (bot_with_initiative == i)
-                    data[:visible_gems] = []
+                        data[:tick] = @tick
+                        data[:bot] = bot_position
+                        data[:wall] = []
+                        data[:floor] = []
+                        data[:initiative] = (bot_with_initiative == i)
+                        data[:visible_gems] = []
 
-                    @visibility[(bot_position[1] << 16) | bot_position[0]].each do |t|
-                        key = @maze.include?(t) ? :wall : :floor
-                        data[key] << [t & 0xFFFF, t >> 16]
-                        @gems.each do |gem|
-                            if gem[:position_offset] == t
-                                data[:visible_gems] << {:position => gem[:position], :ttl => gem[:ttl]}
+                        @visibility[(bot_position[1] << 16) | bot_position[0]].each do |t|
+                            key = @maze.include?(t) ? :wall : :floor
+                            data[key] << [t & 0xFFFF, t >> 16]
+                            @gems.each do |gem|
+                                if gem[:position_offset] == t
+                                    data[:visible_gems] << {:position => gem[:position], :ttl => gem[:ttl]}
+                                end
                             end
                         end
-                    end
-                    if @emit_signals
-                        level_sum = 0.0
-                        @gems.each.with_index do |gem, i|
-                            level_sum += signal_level[i][(bot_position[1] << 16) | bot_position[0]] || 0.0
+                        if @emit_signals
+                            level_sum = 0.0
+                            @gems.each.with_index do |gem, i|
+                                level_sum += signal_level[i][(bot_position[1] << 16) | bot_position[0]] || 0.0
+                            end
+                            data[:signal_level] = format("%.6f", level_sum).to_f
                         end
-                        data[:signal_level] = format("%.6f", level_sum).to_f
                     end
 
                     start_mono = Process.clock_gettime(Process::CLOCK_MONOTONIC)
                     deadline_mono = start_mono + (@tick == 0 ? HARD_LIMIT_FIRST_TICK : HARD_LIMIT)
 
-                    begin
-                        @bots_io[i].stdin.puts(data.to_json)
-                        @bots_io[i].stdin.flush
-                    rescue Errno::EPIPE
-                        # bot has terminated unexpectedly
-                        if @bots[i][:disqualified_for].nil?
-                            @bots[i][:disqualified_for] = 'terminated_unexpectedly'
-                            if @announcer_enabled
-                                @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{bot[:name]} has terminated unexpectedly!" }
+                    $timings.profile("write to bot's stdin") do
+                        begin
+                            @bots_io[i].stdin.puts(data.to_json)
+                            @bots_io[i].stdin.flush
+                        rescue Errno::EPIPE
+                            # bot has terminated unexpectedly
+                            if @bots[i][:disqualified_for].nil?
+                                @bots[i][:disqualified_for] = 'terminated_unexpectedly'
+                                if @announcer_enabled
+                                    @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{bot[:name]} has terminated unexpectedly!" }
+                                end
                             end
                         end
                     end
@@ -696,7 +716,10 @@ class Runner
                     @protocol[i].last[:bots][:data] = data
 
                     # line = @bots_io[i].stdout.gets.strip
-                    status, line = read_line_before_deadline(@bots_io[i].stdout, deadline_mono)
+                    status = line = nil
+                    $timings.profile("read from bot's stdout") do
+                        status, line = read_line_before_deadline(@bots_io[i].stdout, deadline_mono)
+                    end
                     elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - start_mono
                     if status == :hard_timeout
                         if @bots[i][:disqualified_for].nil?
@@ -787,7 +810,6 @@ class Runner
                     if IO.select([STDIN], nil, nil, 0)
                         key = stdin.getc
                         if key == "q"
-                            # @tick = 0
                             exit
                         end
                     end
@@ -814,7 +836,9 @@ class Runner
             puts
         end
         if @rounds == 1
-            puts "Seed: #{@seed.to_s(36)} / Score: #{@bots.map { |x| x[:score]}.join(' / ')}"
+            unless @asciinema
+                puts "Seed: #{@seed.to_s(36)} / Score: #{@bots.map { |x| x[:score]}.join(' / ')}"
+            end
         else
             print "\rFinished round #{@round + 1} of #{@rounds}..."
         end
@@ -862,6 +886,8 @@ options = {
     use_docker: false,
     rounds: 1,
     announcer_enabled: true,
+    asciinema: false,
+    show_timings: false,
 }
 
 unless ARGV.include?('--stage')
@@ -973,6 +999,15 @@ OptionParser.new do |opts|
     end
     opts.on("--max-tps N", Integer, "Max ticks/second (0 to disable, default: #{options[:max_tps]})") do |x|
         options[:max_tps] = x
+    end
+    opts.on("--[no-]announcer", "Add announcer to chat log (default: #{options[:announcer_enabled]})") do |x|
+        options[:announcer_enabled] = x
+    end
+    opts.on("--[no-]asciinema", "Optimize rendering for asciinema recording (default: #{options[:asciinema]})") do |x|
+        options[:asciinema] = x
+    end
+    opts.on("--[no-]show-timings", "Show timings after run (default: #{options[:show_timings]})") do |x|
+        options[:show_timings] = x
     end
 end.parse!
 
@@ -1113,4 +1148,8 @@ else
             f.write(all_reports.to_json)
         end
     end
+end
+
+if options[:show_timings]
+    $timings.report
 end
