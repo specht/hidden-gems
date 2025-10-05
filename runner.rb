@@ -113,7 +113,7 @@ class Runner
                    signal_noise:, signal_cutoff:, signal_fade:, swap_bots:,
                    cache:, profile:, check_determinism:, use_docker:,
                    rounds:, verbose:, max_tps:, announcer_enabled:,
-                   asciinema:, show_timings:
+                   ansi_log_path:, show_timings:
                    )
         @seed = seed
         @width = width
@@ -145,7 +145,8 @@ class Runner
         @stage_title = '(no stage)'
         @stage_key = '(no stage)'
         @announcer_enabled = announcer_enabled
-        @asciinema = asciinema
+        @ansi_log_path = ansi_log_path
+        @ansi_log = []
         @show_timings = show_timings
     end
 
@@ -219,7 +220,7 @@ class Runner
 
             @tile_width = 2
 
-            if @asciinema
+            if @ansi_log_path
                 @terminal_width = @width * @tile_width
                 @terminal_height = @height + 1
             end
@@ -229,7 +230,7 @@ class Runner
             @chatlog_width = 0
             @chatlog_height = 0
 
-            if @verbose >= 2 && !@asciinema
+            if @verbose >= 2 && @ansi_log_path.nil?
                 # There are two possible places for the chat log:
                 # - right side of the maze (if terminal is wide enough)
                 # - below the maze (if terminal is high enough)
@@ -435,7 +436,7 @@ class Runner
                     io.print ' '
                     io.print chat_lines[y]
                 end
-                io.puts unless (@asciinema && (y == @height - 1))
+                io.puts unless (@ansi_log_path && (y == @height - 1))
             end
             if @enable_chatlog && @chatlog_position == :bottom
                 chat_lines.each do |line|
@@ -636,10 +637,15 @@ class Runner
                 end
 
                 # STEP 2: RENDER
-                if @verbose >= 2
+                if @verbose >= 2 || @ansi_log_path
                     screen = render(signal_level)
                     # @protocol.last[:screen] = screen
-                    print screen
+                    if @verbose >= 2
+                        print screen
+                    end
+                    if @ansi_log_path
+                        @ansi_log << {:screen => screen}
+                    end
                 end
                 t1 = Time.now.to_f
                 @tps = (@tick.to_f / (t1 - t0)).round
@@ -697,6 +703,9 @@ class Runner
                     start_mono = Process.clock_gettime(Process::CLOCK_MONOTONIC)
                     deadline_mono = start_mono + (@tick == 0 ? HARD_LIMIT_FIRST_TICK : HARD_LIMIT)
 
+                    if @ansi_log_path
+                        @ansi_log.last[:stdin] = data
+                    end
                     $timings.profile("write to bot's stdin") do
                         begin
                             @bots_io[i].stdin.puts(data.to_json)
@@ -836,7 +845,7 @@ class Runner
             puts
         end
         if @rounds == 1
-            unless @asciinema
+            unless @ansi_log_path
                 puts "Seed: #{@seed.to_s(36)} / Score: #{@bots.map { |x| x[:score]}.join(' / ')}"
             end
         else
@@ -852,6 +861,11 @@ class Runner
             end
             if @check_determinism
                 results[i][:protocol_checksum] = Digest::SHA256.hexdigest(@protocol[i].to_json)
+            end
+        end
+        if @ansi_log_path
+            File.open(@ansi_log_path, 'w') do |f|
+                f.write(@ansi_log.to_json)
             end
         end
         results
@@ -886,7 +900,7 @@ options = {
     use_docker: false,
     rounds: 1,
     announcer_enabled: true,
-    asciinema: false,
+    ansi_log_path: nil,
     show_timings: false,
 }
 
@@ -1003,8 +1017,8 @@ OptionParser.new do |opts|
     opts.on("--[no-]announcer", "Add announcer to chat log (default: #{options[:announcer_enabled]})") do |x|
         options[:announcer_enabled] = x
     end
-    opts.on("--[no-]asciinema", "Optimize rendering for asciinema recording (default: #{options[:asciinema]})") do |x|
-        options[:asciinema] = x
+    opts.on("--ansi-log-path PATH", "Write ANSI and stdin log to JSON file") do |x|
+        options[:ansi_log_path] = x
     end
     opts.on("--[no-]show-timings", "Show timings after run (default: #{options[:show_timings]})") do |x|
         options[:show_timings] = x
