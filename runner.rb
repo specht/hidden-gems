@@ -222,7 +222,12 @@ class Runner
                 end
             end
 
-            @terminal_height, @terminal_width = $stdout.winsize
+            begin
+                @terminal_height, @terminal_width = $stdout.winsize
+            rescue
+                @terminal_height = 24
+                @terminal_width = 80
+            end
 
             @tile_width = 2
 
