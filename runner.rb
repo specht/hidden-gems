@@ -576,7 +576,10 @@ class Runner
         @tick = -1
         @tps = 0
         t0 = Time.now.to_f
-        STDIN.echo = false
+        begin
+            STDIN.echo = false
+        rescue
+        end
         results = @bots.map do |b|
              { :ticks_to_first_capture => nil }
         end
