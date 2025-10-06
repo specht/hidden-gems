@@ -160,6 +160,30 @@ class Runner
         Set.new(maze)
     end
 
+    def atomic_gzip_write(path, string)
+        dir = File.dirname(path)
+        base = File.basename(path)
+        tmp  = File.join(dir, ".#{base}.#{$$}.#{Thread.current.object_id}.tmp")
+
+        FileUtils.mkdir_p(dir)
+        File.open(tmp, File::WRONLY | File::CREAT | File::TRUNC, 0o644) do |f|
+            gz = Zlib::GzipWriter.new(f)
+            gz.write(string)
+            gz.finish
+            f.flush
+            f.fsync
+        end
+        File.rename(tmp, path)
+        File.open(dir) { |dfd| dfd.fsync rescue nil }
+    end
+
+    def safe_gzip_read(path)
+        Zlib::GzipReader.open(path) { |gz| gz.read }
+    rescue Zlib::GzipFile::Error, EOFError
+        sleep 0.05
+        Zlib::GzipReader.open(path) { |gz| gz.read }
+    end
+
     def setup
         $timings.profile("setup") do
             @rng = PCG32.new(@seed)
@@ -187,38 +211,29 @@ class Runner
             end
             @message_queue = Queue.new
 
-            visibility_path = "cache/#{@checksum}.yaml.gz"
+            visibility_path = "cache/#{@checksum}.marshal.gz"
+
             if @cache && File.exist?(visibility_path)
-                Zlib::GzipReader.open(visibility_path) do |gz|
-                    yaml = gz.read
-                    @visibility =
-                    begin
-                        YAML.safe_load(yaml, permitted_classes: [Set], aliases: true)
-                    rescue ArgumentError
-                        YAML.safe_load(yaml, [Set], [], true)
-                    end
-                end
+                data = safe_gzip_read(visibility_path)
+                @visibility = Marshal.load(data)
             else
                 # pre-calculate visibility from each tile
                 @visibility = {}
                 (0...@height).each do |y|
                     (0...@width).each do |x|
                         offset = (y << 16) | x
-                        v = Set.new()
+                        v = Set.new
                         unless @maze.include?(offset)
-                            visible = FOVAngle.visible(@width, @height, @maze, x, y, radius: @vis_radius) { |x, y| @maze.include?((y << 16) | x) }
-                            v = visible.to_a.map do |p|
-                                (p[1] << 16) | p[0]
-                            end.sort
+                            visible = FOVAngle.visible(@width, @height, @maze, x, y, radius: @vis_radius) { |xx, yy| @maze.include?((yy << 16) | xx) }
+                            v = visible.to_a.map { |p| (p[1] << 16) | p[0] }.sort
                         end
                         @visibility[offset] = Set.new(v)
                     end
                 end
+
                 if @cache
-                    FileUtils.mkpath(File.dirname(visibility_path))
-                    Zlib::GzipWriter.open(visibility_path) do |gz|
-                        gz.write @visibility.to_yaml
-                    end
+                    bytes = Marshal.dump(@visibility)
+                    atomic_gzip_write(visibility_path, bytes)
                 end
             end
 
