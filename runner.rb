@@ -844,13 +844,16 @@ class Runner
                 if @rng.next_float() < @gem_spawn_rate && @gems.size < @max_gems
                     ttl_spawned += add_gem()
                 end
-                STDIN.raw do |stdin|
-                    if IO.select([STDIN], nil, nil, 0)
-                        key = stdin.getc
-                        if key == "q"
-                            exit
+                begin
+                    STDIN.raw do |stdin|
+                        if IO.select([STDIN], nil, nil, 0)
+                            key = stdin.getc
+                            if key == "q"
+                                exit
+                            end
                         end
                     end
+                rescue
                 end
             end
             @bots_io.each do |b|
