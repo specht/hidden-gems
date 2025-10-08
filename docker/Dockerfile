@@ -19,7 +19,7 @@ RUN apt-get update \
       default-jdk \
       lua5.4 \
       libc6 libstdc++6 libgcc-s1 zlib1g libssl3 \
-      rsync wget golang nodejs php \
+      rsync wget golang nodejs php rustc cargo \
  && rm -rf /var/lib/apt/lists/*
 
 # Install PowerShell
