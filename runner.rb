@@ -861,7 +861,10 @@ class Runner
             end
         ensure
             print "\033[?25h" if @verbose >= 2
-            STDIN.echo = true
+            begin
+                STDIN.echo = true
+            rescue
+            end
         end
         # if a bot was disqualified, set their score to 0
         @bots.each do |bot|
