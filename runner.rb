@@ -369,7 +369,7 @@ class Runner
         out = []
         line = +""
 
-        tokens = text.split(/\s+/).flat_map { |t| chunk_token(t, body_w) }
+        tokens = text.scrub.split(/\s+/).flat_map { |t| chunk_token(t, body_w) }
         tokens.each do |tok|
             if line.empty?
                 line = tok.dup
