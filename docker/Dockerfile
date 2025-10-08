@@ -19,7 +19,7 @@ RUN apt-get update \
       default-jdk \
       lua5.4 \
       libc6 libstdc++6 libgcc-s1 zlib1g libssl3 \
-      rsync wget golang nodejs php rustc cargo \
+      rsync wget golang nodejs php \
  && rm -rf /var/lib/apt/lists/*
 
 # Install PowerShell
@@ -68,6 +68,9 @@ WORKDIR /app
 RUN chown -R runner:runner /app
 RUN chown -R runner:runner /usr/local/julia
 USER runner
+
+RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
+RUN mkdir -p /home/runner/.cargo && echo "[source.crates-io]\nreplace-with = \"vendored-sources\"\n\n[source.vendored-sources]\ndirectory = \"vendor\"" >> /home/runner/.cargo/config
 
 ENTRYPOINT ["/usr/bin/tini","--"]
 CMD ["/launch.sh"]
