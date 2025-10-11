@@ -588,6 +588,8 @@ class Runner
                 chat_lines = render_chatlog(@chatlog, @chatlog_width, @chatlog_height)
             end
 
+            bot_with_initiative = ((@tick + (@swap_bots ? 1 : 0)) % @bots.size)
+
             (0...@height).each do |y|
                 (0...@width).each do |x|
                     c = ' ' * @tile_width
@@ -595,7 +597,9 @@ class Runner
                     if @maze.include?((y << 16) | x)
                         bg = mix_rgb_hex(WALL_COLOR, '#000000', paint_rng.next_float() * 0.25)
                     end
-                    @bots.each.with_index do |bot, i|
+                    (0...@bots.size).each do |_k|
+                        i = (_k + bot_with_initiative) % @bots.size
+                        bot = @bots[i]
                         next if bot[:disqualified_for]
                         p = bot[:position]
                         if p[0] == x && p[1] == y
@@ -1010,11 +1014,13 @@ class Runner
                     # STEP 4: COLLECT GEMS & DECAY GEMS
                     collected_gems = []
                     @gems.each.with_index do |gem, i|
+                        collected_this_gem = false
                         (0...@bots.size).each do |_k|
-                            next if @bots[_k][:disqualified_for]
                             k = (_k + bot_with_initiative) % @bots.size
                             bot = @bots[k]
+                            next if bot[:disqualified_for]
                             if bot[:position] == gem[:position]
+                                collected_this_gem = true
                                 collected_gems << i
                                 bot[:score] += gem[:ttl]
                                 results[k][:ticks_to_first_capture] ||= @tick
@@ -1022,6 +1028,7 @@ class Runner
                                     @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{bot[:name]} scored a gem with #{gem[:ttl]} points!" }
                                 end
                             end
+                            break if collected_this_gem
                         end
                     end
                     collected_gems.reverse.each do |i|
