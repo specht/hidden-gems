@@ -65,79 +65,81 @@ if Gem.win_platform?
 end
 
 module KeyInput
-    module Windows
-        require 'fiddle/import'
-        extend self
+    if Gem.win_platform?
+        module Windows
+            require 'fiddle/import'
+            extend self
 
-        module User32
-            extend Fiddle::Importer
-            dlload 'user32'
-            extern 'short GetAsyncKeyState(int)'
-        end
+            module User32
+                extend Fiddle::Importer
+                dlload 'user32'
+                extern 'short GetAsyncKeyState(int)'
+            end
 
-        VK = {
-            left:   0x25, up:    0x26, right: 0x27, down: 0x28,
-            home:   0x24, end_:  0x23, space: 0x20, q: 0x51
-        }.freeze
+            VK = {
+                left:   0x25, up:    0x26, right: 0x27, down: 0x28,
+                home:   0x24, end_:  0x23, space: 0x20, q: 0x51
+            }.freeze
 
-        KEYMAP = {
-            VK[:up]     => 'up',
-            VK[:down]   => 'down',
-            VK[:left]   => 'left',
-            VK[:right]  => 'right',
-            VK[:home]   => 'home',
-            VK[:end_]   => 'end',
-            VK[:space]  => ' ',
-            VK[:q]      => 'q',
-        }.freeze
+            KEYMAP = {
+                VK[:up]     => 'up',
+                VK[:down]   => 'down',
+                VK[:left]   => 'left',
+                VK[:right]  => 'right',
+                VK[:home]   => 'home',
+                VK[:end_]   => 'end',
+                VK[:space]  => ' ',
+                VK[:q]      => 'q',
+            }.freeze
 
-        REPEATABLE = %w[left right up down home end].freeze
+            REPEATABLE = %w[left right up down home end].freeze
 
-        INITIAL_REPEAT_DELAY = 0.30
-        REPEAT_INTERVAL      = 0.05
+            INITIAL_REPEAT_DELAY = 0.30
+            REPEAT_INTERVAL      = 0.05
 
-        @prev_down = Hash.new(false)
-        @held_key_name = nil
-        @held_started_at = nil
-        @last_emit_at = nil
+            @prev_down = Hash.new(false)
+            @held_key_name = nil
+            @held_started_at = nil
+            @last_emit_at = nil
 
-        def get_key(paused)
-            loop do
-                now = Time.now
-                down_key_name = nil
+            def get_key(paused)
+                loop do
+                    now = Time.now
+                    down_key_name = nil
 
-                KEYMAP.each do |vk, name|
-                    down_now = (User32.GetAsyncKeyState(vk) & 0x8000) != 0
-                    @prev_down[vk] = down_now
-                    if down_now && down_key_name.nil?
-                        down_key_name = name
-                    end
-                end
-
-                unless down_key_name
-                    @held_key_name = nil
-                    @held_started_at = nil
-                    @last_emit_at = nil
-                    return nil unless paused
-                    sleep 0.01
-                    next
-                end
-
-                if @held_key_name != down_key_name
-                    @held_key_name = down_key_name
-                    @held_started_at = now
-                    @last_emit_at = now
-                    return down_key_name
-                else
-                    if REPEATABLE.include?(down_key_name)
-                        if (now - @held_started_at) >= INITIAL_REPEAT_DELAY &&
-                            (now - @last_emit_at)   >= REPEAT_INTERVAL
-                            @last_emit_at = now
-                            return down_key_name
+                    KEYMAP.each do |vk, name|
+                        down_now = (User32.GetAsyncKeyState(vk) & 0x8000) != 0
+                        @prev_down[vk] = down_now
+                        if down_now && down_key_name.nil?
+                            down_key_name = name
                         end
                     end
-                    return nil unless paused
-                    sleep 0.01
+
+                    unless down_key_name
+                        @held_key_name = nil
+                        @held_started_at = nil
+                        @last_emit_at = nil
+                        return nil unless paused
+                        sleep 0.01
+                        next
+                    end
+
+                    if @held_key_name != down_key_name
+                        @held_key_name = down_key_name
+                        @held_started_at = now
+                        @last_emit_at = now
+                        return down_key_name
+                    else
+                        if REPEATABLE.include?(down_key_name)
+                            if (now - @held_started_at) >= INITIAL_REPEAT_DELAY &&
+                                (now - @last_emit_at)   >= REPEAT_INTERVAL
+                                @last_emit_at = now
+                                return down_key_name
+                            end
+                        end
+                        return nil unless paused
+                        sleep 0.01
+                    end
                 end
             end
         end
@@ -147,11 +149,10 @@ module KeyInput
         extend self
 
         def get_key(paused, stdin: STDIN)
-            timeout = paused ? nil : 0
-            ready = IO.select([stdin], nil, nil, timeout)
-            return nil unless ready
-
             stdin.raw do
+                timeout = paused ? nil : 0
+                ready = IO.select([stdin], nil, nil, timeout)
+                return nil unless ready
                 key = stdin.getc
                 return nil unless key
 
