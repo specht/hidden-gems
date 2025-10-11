@@ -18,7 +18,7 @@ RUN apt-get update \
       nodejs npm \
       default-jdk \
       lua5.4 \
-      libc6 libstdc++6 libgcc-s1 cmake zlib1g libssl3 \
+      libc6 libstdc++6 libgcc-s1 zlib1g libssl3 \
       rsync wget golang nodejs php \
  && rm -rf /var/lib/apt/lists/*
 
@@ -35,6 +35,11 @@ RUN apt-get update && apt-get install -y wget apt-transport-https software-prope
 RUN wget https://storage.googleapis.com/dart-archive/channels/stable/release/3.8.2/linux_packages/dart_3.8.2-1_amd64.deb \
     && dpkg -i dart_3.8.2-1_amd64.deb \
     && rm dart_3.8.2-1_amd64.deb
+
+# Install cmake
+RUN wget https://github.com/Kitware/CMake/releases/download/v4.0.4/cmake-4.0.4-linux-x86_64.sh \
+    && sh cmake-4.0.4-linux-x86_64.sh --skip-license --prefix=/usr/local \
+    && rm cmake-4.0.4-linux-x86_64.sh
 
 # # Install .NET SDK
 # RUN apt-get update \
