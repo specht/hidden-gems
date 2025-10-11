@@ -186,9 +186,10 @@ end
 
 class Runner
 
-    UI_BACKGROUND_TOP = '#143b86'
-    UI_BACKGROUND_BOTTOM = '#222728'
-    UI_FOREGROUND = '#e7e6e1'
+    UI_BACKGROUND_TOP = '#1d5479'
+    UI_FOREGROUND_TOP = '#eeeeec'
+    UI_BACKGROUND_BOTTOM = '#232626'
+    UI_FOREGROUND_BOTTOM = '#55beed'
 
     PORTAL_EMOJIS = ['🔴', '🔵', '🟢', '🟡']
     ANTENNA_EMOJI = '📡'
@@ -544,8 +545,8 @@ class Runner
     end
 
     def render(tick, signal_level)
-        fg_top_mix = mix_rgb_hex(UI_FOREGROUND, UI_BACKGROUND_TOP, 0.5)
-        fg_bottom_mix = mix_rgb_hex(UI_FOREGROUND, UI_BACKGROUND_BOTTOM, 0.5)
+        fg_top_mix = mix_rgb_hex(UI_FOREGROUND_TOP, UI_BACKGROUND_TOP, 0.5)
+        fg_bottom_mix = mix_rgb_hex(UI_FOREGROUND_BOTTOM, UI_BACKGROUND_BOTTOM, 0.5)
         StringIO.open do |io|
             io.print "\033[H" if @verbose >= 2
 
@@ -554,26 +555,26 @@ class Runner
             status_line = [
                 [
                     Paint['  ', fg_bottom_mix, UI_BACKGROUND_TOP],
-                    Paint['Stage: ', UI_FOREGROUND, UI_BACKGROUND_TOP, :bold],
-                    Paint[@stage_key, UI_FOREGROUND, UI_BACKGROUND_TOP],
+                    Paint['Stage: ', UI_FOREGROUND_TOP, UI_BACKGROUND_TOP, :bold],
+                    Paint[@stage_key, UI_FOREGROUND_TOP, UI_BACKGROUND_TOP],
                 ],
                 [
-                    Paint['Seed: ', UI_FOREGROUND, UI_BACKGROUND_TOP, :bold],
-                    Paint[@seed.to_s(36), UI_FOREGROUND, UI_BACKGROUND_TOP],
+                    Paint['Seed: ', UI_FOREGROUND_TOP, UI_BACKGROUND_TOP, :bold],
+                    Paint[@seed.to_s(36), UI_FOREGROUND_TOP, UI_BACKGROUND_TOP],
                 ],
                 [
-                    Paint['Tick: ', UI_FOREGROUND, UI_BACKGROUND_TOP, :bold],
-                    Paint[sprintf("%#{(@max_ticks - 1).to_s.size}d", tick), UI_FOREGROUND, UI_BACKGROUND_TOP],
+                    Paint['Tick: ', UI_FOREGROUND_TOP, UI_BACKGROUND_TOP, :bold],
+                    Paint[sprintf("%#{(@max_ticks - 1).to_s.size}d", tick), UI_FOREGROUND_TOP, UI_BACKGROUND_TOP],
                 ],
                 [
-                    Paint['Score: ', UI_FOREGROUND, UI_BACKGROUND_TOP, :bold],
-                    Paint[score_s, UI_FOREGROUND, UI_BACKGROUND_TOP],
+                    Paint['Score: ', UI_FOREGROUND_TOP, UI_BACKGROUND_TOP, :bold],
+                    Paint[score_s, UI_FOREGROUND_TOP, UI_BACKGROUND_TOP],
                 ],
-            ].map { |x| x.join('') }.join(Paint['  |  ', UI_FOREGROUND, UI_BACKGROUND_TOP])
+            ].map { |x| x.join('') }.join(Paint['  |  ', UI_FOREGROUND_TOP, UI_BACKGROUND_TOP])
             while strip_ansi(status_line).size > @terminal_width && status_line.size > 10
                 status_line = status_line[0..-2]
             end
-            status_line += Paint[' ' * (@terminal_width - vwidth(strip_ansi(status_line))), UI_FOREGROUND, UI_BACKGROUND_TOP]
+            status_line += Paint[' ' * (@terminal_width - vwidth(strip_ansi(status_line))), UI_FOREGROUND_TOP, UI_BACKGROUND_TOP]
             io.puts status_line
 
             paint_rng = PCG32.new(1234)
@@ -635,29 +636,29 @@ class Runner
             status_line = [
                 [
                     Paint['  ', fg_bottom_mix, UI_BACKGROUND_BOTTOM],
-                    Paint['[Q]', UI_FOREGROUND, UI_BACKGROUND_BOTTOM],
+                    Paint['[Q]', UI_FOREGROUND_BOTTOM, UI_BACKGROUND_BOTTOM],
                     Paint[' Quit', fg_bottom_mix, UI_BACKGROUND_BOTTOM],
                 ],
                 [
-                    Paint['[Space]', UI_FOREGROUND, UI_BACKGROUND_BOTTOM],
+                    Paint['[Space]', UI_FOREGROUND_BOTTOM, UI_BACKGROUND_BOTTOM],
                     Paint[' Pause', fg_bottom_mix, UI_BACKGROUND_BOTTOM],
                 ],
                 [
-                    Paint['[←][→]', UI_FOREGROUND, UI_BACKGROUND_BOTTOM],
+                    Paint['[←][→]', UI_FOREGROUND_BOTTOM, UI_BACKGROUND_BOTTOM],
                     Paint[' Step', fg_bottom_mix, UI_BACKGROUND_BOTTOM],
                 ],
                 [
-                    Paint['[Home]', UI_FOREGROUND, UI_BACKGROUND_BOTTOM],
+                    Paint['[Home]', UI_FOREGROUND_BOTTOM, UI_BACKGROUND_BOTTOM],
                     Paint[' Rewind', fg_bottom_mix, UI_BACKGROUND_BOTTOM],
                 ],
                 [
-                    Paint[@bots.map.with_index { |x, i| "#{x[:emoji]} #{((@protocol[i][-2] || {})[:bots] || {})[:response]}" }.join(' : '), UI_FOREGROUND, UI_BACKGROUND_BOTTOM]
+                    Paint[@bots.map.with_index { |x, i| "#{x[:emoji]} #{((@protocol[i][-2] || {})[:bots] || {})[:response]}" }.join(' : '), UI_FOREGROUND_BOTTOM, UI_BACKGROUND_BOTTOM]
                 ],
             ].map { |x| x.join('') }.join(Paint['  |  ', fg_bottom_mix, UI_BACKGROUND_BOTTOM])
             while strip_ansi(status_line).size > @terminal_width && status_line.size > 10
                 status_line = status_line[0..-2]
             end
-            status_line += Paint[' ' * (@terminal_width - vwidth(strip_ansi(status_line))), UI_FOREGROUND, UI_BACKGROUND_BOTTOM]
+            status_line += Paint[' ' * (@terminal_width - vwidth(strip_ansi(status_line))), UI_FOREGROUND_BOTTOM, UI_BACKGROUND_BOTTOM]
             io.print status_line
 
             if @enable_chatlog && @chatlog_position == :bottom
