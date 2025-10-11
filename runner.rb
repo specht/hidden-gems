@@ -387,7 +387,7 @@ class Runner
             @tile_width = 2
 
             if @ansi_log_path
-                @terminal_width = @width * @tile_width
+                @terminal_width = @width * @tile_width + 0
                 @terminal_height = @height + 1
             end
 
@@ -396,7 +396,7 @@ class Runner
             @chatlog_width = 0
             @chatlog_height = 0
 
-            if @verbose >= 2 && @ansi_log_path.nil?
+            if @verbose >= 2 || (!@ansi_log_path.nil?)
                 # There are two possible places for the chat log:
                 # - right side of the maze (if terminal is wide enough)
                 # - below the maze (if terminal is high enough)
@@ -574,7 +574,7 @@ class Runner
             while strip_ansi(status_line).size > @terminal_width && status_line.size > 10
                 status_line = status_line[0..-2]
             end
-            status_line += Paint[' ' * (@terminal_width - vwidth(strip_ansi(status_line))), UI_FOREGROUND_TOP, UI_BACKGROUND_TOP]
+            status_line += Paint[' ' * [(@terminal_width - vwidth(strip_ansi(status_line))), 0].max, UI_FOREGROUND_TOP, UI_BACKGROUND_TOP]
             io.puts status_line
 
             paint_rng = PCG32.new(1234)
@@ -658,7 +658,7 @@ class Runner
             while strip_ansi(status_line).size > @terminal_width && status_line.size > 10
                 status_line = status_line[0..-2]
             end
-            status_line += Paint[' ' * (@terminal_width - vwidth(strip_ansi(status_line))), UI_FOREGROUND_BOTTOM, UI_BACKGROUND_BOTTOM]
+            status_line += Paint[' ' * [(@terminal_width - vwidth(strip_ansi(status_line))), 0].max, UI_FOREGROUND_BOTTOM, UI_BACKGROUND_BOTTOM]
             io.print status_line
 
             if @enable_chatlog && @chatlog_position == :bottom
