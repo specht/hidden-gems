@@ -48,7 +48,8 @@ Paint.mode = 0xffffff
 
 class Runner
 
-    UI_BACKGROUND = '#143b86'
+    UI_BACKGROUND_TOP = '#143b86'
+    UI_BACKGROUND_BOTTOM = '#222728'
     UI_FOREGROUND = '#e7e6e1'
 
     PORTAL_EMOJIS = ['🔴', '🔵', '🟢', '🟡']
@@ -397,20 +398,45 @@ class Runner
             prev_emoji = e[:emoji]
         end
 
-        lines.last([height, 0].max).map { |l| l.ljust(width) }
+        lines.last([height, 0].max)
     end
 
-    def render(signal_level)
+    def strip_ansi(str)
+        str.gsub(/\e\[[0-9;]*[A-Za-z]/, '')
+    end
+
+    def render(tick, signal_level)
+        fg_top_mix = mix_rgb_hex(UI_FOREGROUND, UI_BACKGROUND_TOP, 0.5)
+        fg_bottom_mix = mix_rgb_hex(UI_FOREGROUND, UI_BACKGROUND_BOTTOM, 0.5)
         StringIO.open do |io|
             io.print "\033[H" if @verbose >= 2
 
             score_s = @bots.map { |x| "#{x[:emoji]} #{x[:score]}" }.join(' : ')
 
-            status_line = sprintf("  Stage: #{@stage_key}  │  Seed: #{@seed.to_s(36)}  │  Tick: %#{(@max_ticks - 1).to_s.size}d  │  Score: #{score_s}", @tick)
-            status_line = status_line[0, @terminal_width] if status_line.size > @terminal_width
-            status_line = status_line + ' ' * (@terminal_width - vwidth(status_line))
-
-            io.puts Paint[status_line, UI_FOREGROUND, UI_BACKGROUND]
+            status_line = [
+                [
+                    Paint['  ', fg_bottom_mix, UI_BACKGROUND_TOP],
+                    Paint['Stage: ', UI_FOREGROUND, UI_BACKGROUND_TOP, :bold],
+                    Paint[@stage_key, UI_FOREGROUND, UI_BACKGROUND_TOP],
+                ],
+                [
+                    Paint['Seed: ', UI_FOREGROUND, UI_BACKGROUND_TOP, :bold],
+                    Paint[@seed.to_s(36), UI_FOREGROUND, UI_BACKGROUND_TOP],
+                ],
+                [
+                    Paint['Tick: ', UI_FOREGROUND, UI_BACKGROUND_TOP, :bold],
+                    Paint[sprintf("%#{(@max_ticks - 1).to_s.size}d", tick), UI_FOREGROUND, UI_BACKGROUND_TOP],
+                ],
+                [
+                    Paint['Score: ', UI_FOREGROUND, UI_BACKGROUND_TOP, :bold],
+                    Paint[score_s, UI_FOREGROUND, UI_BACKGROUND_TOP],
+                ],
+            ].map { |x| x.join('') }.join(Paint['  |  ', UI_FOREGROUND, UI_BACKGROUND_TOP])
+            while strip_ansi(status_line).size > @terminal_width && status_line.size > 10
+                status_line = status_line[0..-2]
+            end
+            status_line += Paint[' ' * (@terminal_width - vwidth(strip_ansi(status_line))), UI_FOREGROUND, UI_BACKGROUND_TOP]
+            io.puts status_line
 
             paint_rng = PCG32.new(1234)
 
@@ -460,10 +486,42 @@ class Runner
                 end
                 if @enable_chatlog && @chatlog_position == :right
                     io.print ' '
-                    io.print chat_lines[y]
+                    s = chat_lines[y] || ''
+                    s += ' ' * (@chatlog_width - vwidth(strip_ansi(s)))
+
+                    io.print s
                 end
-                io.puts unless (@ansi_log_path && (y == @height - 1))
+                io.puts
             end
+
+            status_line = [
+                [
+                    Paint['  ', fg_bottom_mix, UI_BACKGROUND_BOTTOM],
+                    Paint['[Q]', UI_FOREGROUND, UI_BACKGROUND_BOTTOM],
+                    Paint[' Quit', fg_bottom_mix, UI_BACKGROUND_BOTTOM],
+                ],
+                [
+                    Paint['[Space]', UI_FOREGROUND, UI_BACKGROUND_BOTTOM],
+                    Paint[' Pause', fg_bottom_mix, UI_BACKGROUND_BOTTOM],
+                ],
+                [
+                    Paint['[←][→]', UI_FOREGROUND, UI_BACKGROUND_BOTTOM],
+                    Paint[' Step', fg_bottom_mix, UI_BACKGROUND_BOTTOM],
+                ],
+                [
+                    Paint['[Home]', UI_FOREGROUND, UI_BACKGROUND_BOTTOM],
+                    Paint[' Rewind', fg_bottom_mix, UI_BACKGROUND_BOTTOM],
+                ],
+                [
+                    Paint[@bots.map.with_index { |x, i| "#{x[:emoji]} #{((@protocol[i][-2] || {})[:bots] || {})[:response]}" }.join(' : '), UI_FOREGROUND, UI_BACKGROUND_BOTTOM]
+                ],
+            ].map { |x| x.join('') }.join(Paint['  |  ', fg_bottom_mix, UI_BACKGROUND_BOTTOM])
+            while strip_ansi(status_line).size > @terminal_width && status_line.size > 10
+                status_line = status_line[0..-2]
+            end
+            status_line += Paint[' ' * (@terminal_width - vwidth(strip_ansi(status_line))), UI_FOREGROUND, UI_BACKGROUND_BOTTOM]
+            io.print status_line
+
             if @enable_chatlog && @chatlog_position == :bottom
                 chat_lines.each do |line|
                     io.puts line
@@ -573,7 +631,7 @@ class Runner
             exit
         end
         print "\033[2J" if @verbose >= 2
-        @tick = -1
+        @tick = 0
         @tps = 0
         t0 = Time.now.to_f
         begin
@@ -607,249 +665,292 @@ class Runner
                 @chatlog << {emoji: ANNOUNCER_EMOJI, text: @rng.sample(COMMENT_VERSUS) }
             end
         end
+        frames = []
+        paused = false
         begin
             print "\033[?25l" if @verbose >= 2
             loop do
-                until @message_queue.empty?
-                    temp = @message_queue.pop(true) rescue nil
-                    next if temp.nil?
-                    @chatlog << {emoji: @bots[temp[:bot]][:emoji], text: temp[:line].chomp}
-                    @bots[temp[:bot]][:stderr_lines] << temp[:line].chomp
-                end
-                # STEP 0: Advance tick
-                @tick += 1
-                break if @tick >= @max_ticks
-
-                (0...@bots.size).each do |i|
-                    @protocol[i] << {}
-                    @protocol[i].last[:tick] = @tick
-                    @protocol[i].last[:rng_state] = @rng.snapshot
-                end
                 tf0 = Time.now.to_f
+                while frames.size <= @tick
+                    running_tick = frames.size
+                    until @message_queue.empty?
+                        temp = @message_queue.pop(true) rescue nil
+                        next if temp.nil?
+                        @chatlog << {emoji: @bots[temp[:bot]][:emoji], text: temp[:line].chomp}
+                        @bots[temp[:bot]][:stderr_lines] << temp[:line].chomp
+                    end
 
-                # STEP 1: Calculate signal levels at each tile
-                if @emit_signals
-                    signal_level = @gems.map do |gem|
-                        temp = if @signal_noise > 0.0
-                            gem[:level].transform_values do |l|
-                                l += (@rng.next_float() - 0.5) * 2.0 * @signal_noise
-                                l = 0.0 if l < 0.0
-                                l = 1.0 if l > 1.0
-                                l
+                    (0...@bots.size).each do |i|
+                        @protocol[i] << {}
+                        @protocol[i].last[:tick] = @tick
+                        @protocol[i].last[:rng_state] = @rng.snapshot
+                    end
+
+                    # STEP 1: Calculate signal levels at each tile
+                    if @emit_signals
+                        signal_level = @gems.map do |gem|
+                            temp = if @signal_noise > 0.0
+                                gem[:level].transform_values do |l|
+                                    l += (@rng.next_float() - 0.5) * 2.0 * @signal_noise
+                                    l = 0.0 if l < 0.0
+                                    l = 1.0 if l > 1.0
+                                    l
+                                end
+                            else
+                                gem[:level]
                             end
-                        else
-                            gem[:level]
+                            if @signal_fade > 0
+                                t = 1.0
+                                gem_age = @gem_ttl - gem[:ttl]
+                                if gem_age < @signal_fade
+                                    t = (gem_age + 1).to_f / @signal_fade
+                                elsif gem_age >= @gem_ttl - @signal_fade
+                                    t = (@gem_ttl - gem_age).to_f / @signal_fade
+                                end
+                                t = 0.0 if t < 0.0
+                                t = 1.0 if t > 1.0
+                                if t < 1.0
+                                    temp = temp.transform_values { |x| x * t }
+                                end
+                            end
+                            temp
                         end
-                        if @signal_fade > 0
-                            t = 1.0
-                            gem_age = @gem_ttl - gem[:ttl]
-                            if gem_age < @signal_fade
-                                t = (gem_age + 1).to_f / @signal_fade
-                            elsif gem_age >= @gem_ttl - @signal_fade
-                                t = (@gem_ttl - gem_age).to_f / @signal_fade
-                            end
-                            t = 0.0 if t < 0.0
-                            t = 1.0 if t > 1.0
-                            if t < 1.0
-                                temp = temp.transform_values { |x| x * t }
-                            end
-                        end
-                        temp
                     end
-                end
 
-                @bots.each.with_index do |bot, i|
-                    bot_position = bot[:position]
-                    @visibility[(bot_position[1] << 16) | bot_position[0]].each do |t|
-                        @tiles_revealed[i] << t
-                    end
-                end
-
-                # STEP 2: RENDER
-                if @verbose >= 2 || @ansi_log_path
-                    screen = render(signal_level)
-                    # @protocol.last[:screen] = screen
-                    if @verbose >= 2
-                        print screen
-                    end
-                    if @ansi_log_path
-                        @ansi_log << {:screen => screen}
-                    end
-                end
-                t1 = Time.now.to_f
-                @tps = (@tick.to_f / (t1 - t0)).round
-                if @verbose == 1
-                    print "\rTick: #{@tick} @ #{@tps} tps"
-                end
-
-                break if @bots.all? { |b| b[:disqualified_for] }
-
-                bot_with_initiative = ((@tick + (@swap_bots ? 1 : 0)) % @bots.size)
-
-                # STEP 3: QUERY BOTS: send data, get response, move but don't collect
-
-                @bots.each.with_index do |bot, i|
-                    next if bot[:disqualified_for]
-                    bot_position = bot[:position]
-
-                    data = {}
-                    $timings.profile("prepare data") do
-                        if @tick == 0
-                            data[:config] = {}
-                            %w(stage_key width height generator max_ticks emit_signals vis_radius max_gems
-                            gem_spawn_rate gem_ttl signal_radius signal_cutoff signal_noise
-                            signal_quantization signal_fade).each do |key|
-                                data[:config][key.to_sym] = instance_variable_get("@#{key}")
-                            end
-                            bot_seed = Digest::SHA256.digest("#{@seed}/bot").unpack1('L<')
-                            data[:config][:bot_seed] = bot_seed
-                        end
-                        data[:tick] = @tick
-                        data[:bot] = bot_position
-                        data[:wall] = []
-                        data[:floor] = []
-                        data[:initiative] = (bot_with_initiative == i)
-                        data[:visible_gems] = []
-
+                    @bots.each.with_index do |bot, i|
+                        bot_position = bot[:position]
                         @visibility[(bot_position[1] << 16) | bot_position[0]].each do |t|
-                            key = @maze.include?(t) ? :wall : :floor
-                            data[key] << [t & 0xFFFF, t >> 16]
-                            @gems.each do |gem|
-                                if gem[:position_offset] == t
-                                    data[:visible_gems] << {:position => gem[:position], :ttl => gem[:ttl]}
+                            @tiles_revealed[i] << t
+                        end
+                    end
+
+                    # STEP 2: RENDER
+                    if @verbose >= 2 || @ansi_log_path
+                        screen = render(running_tick, signal_level)
+                        # @protocol.last[:screen] = screen
+                        if @verbose >= 2
+                            print screen
+                        end
+                        frames << screen
+                        if @ansi_log_path
+                            @ansi_log << {:screen => screen}
+                        end
+                    else
+                        frames << nil
+                    end
+                    t1 = Time.now.to_f
+                    @tps = (@tick.to_f / (t1 - t0)).round
+                    if @verbose == 1
+                        print "\rTick: #{@tick} @ #{@tps} tps"
+                    end
+
+                    break if @bots.all? { |b| b[:disqualified_for] }
+
+                    bot_with_initiative = ((@tick + (@swap_bots ? 1 : 0)) % @bots.size)
+
+                    # STEP 3: QUERY BOTS: send data, get response, move but don't collect
+
+                    @bots.each.with_index do |bot, i|
+                        next if bot[:disqualified_for]
+                        bot_position = bot[:position]
+
+                        data = {}
+                        $timings.profile("prepare data") do
+                            if @tick == 0
+                                data[:config] = {}
+                                %w(stage_key width height generator max_ticks emit_signals vis_radius max_gems
+                                gem_spawn_rate gem_ttl signal_radius signal_cutoff signal_noise
+                                signal_quantization signal_fade).each do |key|
+                                    data[:config][key.to_sym] = instance_variable_get("@#{key}")
+                                end
+                                bot_seed = Digest::SHA256.digest("#{@seed}/bot").unpack1('L<')
+                                data[:config][:bot_seed] = bot_seed
+                            end
+                            data[:tick] = @tick
+                            data[:bot] = bot_position
+                            data[:wall] = []
+                            data[:floor] = []
+                            data[:initiative] = (bot_with_initiative == i)
+                            data[:visible_gems] = []
+
+                            @visibility[(bot_position[1] << 16) | bot_position[0]].each do |t|
+                                key = @maze.include?(t) ? :wall : :floor
+                                data[key] << [t & 0xFFFF, t >> 16]
+                                @gems.each do |gem|
+                                    if gem[:position_offset] == t
+                                        data[:visible_gems] << {:position => gem[:position], :ttl => gem[:ttl]}
+                                    end
+                                end
+                            end
+                            if @emit_signals
+                                level_sum = 0.0
+                                @gems.each.with_index do |gem, i|
+                                    level_sum += signal_level[i][(bot_position[1] << 16) | bot_position[0]] || 0.0
+                                end
+                                data[:signal_level] = format("%.6f", level_sum).to_f
+                            end
+                        end
+
+                        start_mono = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+                        deadline_mono = start_mono + (@tick == 0 ? HARD_LIMIT_FIRST_TICK : HARD_LIMIT)
+
+                        if @ansi_log_path
+                            @ansi_log.last[:stdin] = data
+                        end
+                        $timings.profile("write to bot's stdin") do
+                            begin
+                                @bots_io[i].stdin.puts(data.to_json)
+                                @bots_io[i].stdin.flush
+                            rescue Errno::EPIPE
+                                # bot has terminated unexpectedly
+                                if @bots[i][:disqualified_for].nil?
+                                    @bots[i][:disqualified_for] = 'terminated_unexpectedly'
+                                    if @announcer_enabled
+                                        @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{bot[:name]} has terminated unexpectedly!" }
+                                    end
                                 end
                             end
                         end
-                        if @emit_signals
-                            level_sum = 0.0
-                            @gems.each.with_index do |gem, i|
-                                level_sum += signal_level[i][(bot_position[1] << 16) | bot_position[0]] || 0.0
-                            end
-                            data[:signal_level] = format("%.6f", level_sum).to_f
+
+                        @protocol[i].last[:bots] ||= {}
+                        @protocol[i].last[:bots][:data] = data
+
+                        # line = @bots_io[i].stdout.gets.strip
+                        status = line = nil
+                        $timings.profile("read from bot's stdout") do
+                            status, line = read_line_before_deadline(@bots_io[i].stdout, deadline_mono)
                         end
-                    end
-
-                    start_mono = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-                    deadline_mono = start_mono + (@tick == 0 ? HARD_LIMIT_FIRST_TICK : HARD_LIMIT)
-
-                    if @ansi_log_path
-                        @ansi_log.last[:stdin] = data
-                    end
-                    $timings.profile("write to bot's stdin") do
-                        begin
-                            @bots_io[i].stdin.puts(data.to_json)
-                            @bots_io[i].stdin.flush
-                        rescue Errno::EPIPE
-                            # bot has terminated unexpectedly
+                        elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - start_mono
+                        if status == :hard_timeout
+                            if @bots[i][:disqualified_for].nil?
+                                @bots[i][:disqualified_for] = "hard_timeout"
+                                if @announcer_enabled
+                                    @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{bot[:name]} took too long to respond (#{(elapsed * 1000).to_i} ms) and has been terminated!" }
+                                end
+                            end
+                        elsif status == :eof
                             if @bots[i][:disqualified_for].nil?
                                 @bots[i][:disqualified_for] = 'terminated_unexpectedly'
                                 if @announcer_enabled
                                     @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{bot[:name]} has terminated unexpectedly!" }
                                 end
                             end
+                        elsif status == :ok
+                            overtime = (@tick == 0) ? 0.0 : (elapsed - SOFT_LIMIT)
+                            @bots[i][:overtime_used] += overtime if overtime > 0.0
+                            if @announcer_enabled && overtime > 0.0
+                                @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{bot[:name]} exceeded soft limit by #{(overtime * 1e3).to_i} ms (total overtime: #{(@bots[i][:overtime_used] * 1e3).to_i} ms)" }
+                            end
+                            if @bots[i][:overtime_used] > OVERTIME_BUDGET
+                                if @bots[i][:disqualified_for].nil?
+                                    @bots[i][:disqualified_for] = 'overtime_budget_exceeded'
+                                    if @announcer_enabled
+                                        @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{bot[:name]} has exceeded their overtime budget and is disqualified!" }
+                                    end
+                                end
+                            end
+
+                            @protocol[i].last[:bots][:response] = line
+                            command = line.split(' ').first
+                            if ['N', 'E', 'S', 'W'].include?(command)
+                                dir = {'N' => [0, -1], 'E' => [1, 0], 'S' => [0, 1], 'W' => [-1, 0]}
+                                dx = bot_position[0] + dir[command][0]
+                                dy = bot_position[1] + dir[command][1]
+                                if dx >= 0 && dy >= 0 && dx < @width && dy < @height
+                                    unless @maze.include?((dy << 16) | dx)
+                                        @bots[i][:position] = [dx, dy]
+                                    end
+                                end
+                            elsif command == 'WAIT'
+                            else
+                                # invalid command!
+                            end
                         end
                     end
 
-                    @protocol[i].last[:bots] ||= {}
-                    @protocol[i].last[:bots][:data] = data
-
-                    # line = @bots_io[i].stdout.gets.strip
-                    status = line = nil
-                    $timings.profile("read from bot's stdout") do
-                        status, line = read_line_before_deadline(@bots_io[i].stdout, deadline_mono)
-                    end
-                    elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - start_mono
-                    if status == :hard_timeout
-                        if @bots[i][:disqualified_for].nil?
-                            @bots[i][:disqualified_for] = "hard_timeout"
-                            if @announcer_enabled
-                                @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{bot[:name]} took too long to respond (#{(elapsed * 1000).to_i} ms) and has been terminated!" }
-                            end
-                        end
-                    elsif status == :eof
-                        if @bots[i][:disqualified_for].nil?
-                            @bots[i][:disqualified_for] = 'terminated_unexpectedly'
-                            if @announcer_enabled
-                                @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{bot[:name]} has terminated unexpectedly!" }
-                            end
-                        end
-                    elsif status == :ok
-                        overtime = (@tick == 0) ? 0.0 : (elapsed - SOFT_LIMIT)
-                        @bots[i][:overtime_used] += overtime if overtime > 0.0
-                        if @announcer_enabled && overtime > 0.0
-                            @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{bot[:name]} exceeded soft limit by #{(overtime * 1e3).to_i} ms (total overtime: #{(@bots[i][:overtime_used] * 1e3).to_i} ms)" }
-                        end
-                        if @bots[i][:overtime_used] > OVERTIME_BUDGET
-                            if @bots[i][:disqualified_for].nil?
-                                @bots[i][:disqualified_for] = 'overtime_budget_exceeded'
+                    # STEP 4: COLLECT GEMS & DECAY GEMS
+                    collected_gems = []
+                    @gems.each.with_index do |gem, i|
+                        (0...@bots.size).each do |_k|
+                            next if @bots[_k][:disqualified_for]
+                            k = (_k + bot_with_initiative) % @bots.size
+                            bot = @bots[k]
+                            if bot[:position] == gem[:position]
+                                collected_gems << i
+                                bot[:score] += gem[:ttl]
+                                results[k][:ticks_to_first_capture] ||= @tick
                                 if @announcer_enabled
-                                    @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{bot[:name]} has exceeded their overtime budget and is disqualified!" }
+                                    @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{bot[:name]} scored a gem with #{gem[:ttl]} points!" }
                                 end
                             end
                         end
+                    end
+                    collected_gems.reverse.each do |i|
+                        @gems.delete_at(i)
+                    end
+                    @gems.each.with_index do |gem, i|
+                        gem[:ttl] -= 1
+                    end
+                    @gems.reject! do |gem|
+                        gem[:ttl] <= 0
+                    end
 
-                        @protocol[i].last[:bots][:response] = line
-                        command = line.split(' ').first
-                        if ['N', 'E', 'S', 'W'].include?(command)
-                            dir = {'N' => [0, -1], 'E' => [1, 0], 'S' => [0, 1], 'W' => [-1, 0]}
-                            dx = bot_position[0] + dir[command][0]
-                            dy = bot_position[1] + dir[command][1]
-                            if dx >= 0 && dy >= 0 && dx < @width && dy < @height
-                                unless @maze.include?((dy << 16) | dx)
-                                    @bots[i][:position] = [dx, dy]
-                                end
-                            end
-                        elsif command == 'WAIT'
-                        else
-                            # invalid command!
+                    if @rng.next_float() < @gem_spawn_rate && @gems.size < @max_gems
+                        ttl_spawned += add_gem()
+                    end
+                end
+                if @verbose >= 2
+                    print frames[@tick]
+                end
+                unless paused
+                    @tick += 1
+                    break if @tick >= @max_ticks
+                    if @verbose >= 2 && @max_tps > 0
+                        loop do
+                            tf1 = Time.now.to_f
+                            break if tf1 - tf0 > 1.0 / @max_tps
+                            sleep [(1.0 / @max_tps - tf1 + tf0), 0.0].max
                         end
                     end
-                end
-
-                if @verbose >= 2 && @max_tps > 0
-                    loop do
-                        tf1 = Time.now.to_f
-                        break if tf1 - tf0 > 1.0 / @max_tps
-                        sleep [(1.0 / @max_tps - tf1 + tf0), 0.0].max
-                    end
-                end
-
-                # STEP 4: COLLECT GEMS & DECAY GEMS
-                collected_gems = []
-                @gems.each.with_index do |gem, i|
-                    (0...@bots.size).each do |_k|
-                        next if @bots[_k][:disqualified_for]
-                        k = (_k + bot_with_initiative) % @bots.size
-                        bot = @bots[k]
-                        if bot[:position] == gem[:position]
-                            collected_gems << i
-                            bot[:score] += gem[:ttl]
-                            results[k][:ticks_to_first_capture] ||= @tick
-                            if @announcer_enabled
-                                @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{bot[:name]} scored a gem with #{gem[:ttl]} points!" }
-                            end
-                        end
-                    end
-                end
-                collected_gems.reverse.each do |i|
-                    @gems.delete_at(i)
-                end
-                @gems.each.with_index do |gem, i|
-                    gem[:ttl] -= 1
-                end
-                @gems.reject! do |gem|
-                    gem[:ttl] <= 0
-                end
-
-                if @rng.next_float() < @gem_spawn_rate && @gems.size < @max_gems
-                    ttl_spawned += add_gem()
                 end
                 begin
                     STDIN.raw do |stdin|
-                        if IO.select([STDIN], nil, nil, 0)
+                        have_key = paused || IO.select([STDIN], nil, nil, 0)
+                        if have_key
                             key = stdin.getc
-                            if key == "q"
+                            if key == "\e"
+                                # Possible escape sequence (like arrow keys)
+                                c2 = stdin.read_nonblock(1, exception: false)
+                                c3 = stdin.read_nonblock(1, exception: false)
+
+                                seq = key + (c2 || "") + (c3 || "")
+                                case seq
+                                when "\e[A" then key = 'up'
+                                when "\e[B" then key = 'down'
+                                when "\e[C" then key = 'right'
+                                when "\e[D" then key = 'left'
+                                when "\e[H" then key = 'home'
+                                when "\e[F" then key = 'end'
+                                else
+                                    key = nil
+                                end
+                            end
+                            if key == 'q'
                                 exit
+                            elsif key == 'left'
+                                @tick = [@tick - 1, 0].max
+                                paused = true
+                            elsif key == 'home'
+                                @tick = 0
+                                paused = true
+                            elsif key == 'end'
+                                @tick = @max_ticks - 1
+                                paused = true
+                            elsif key == 'right'
+                                @tick = [@tick + 1, @max_ticks - 1].min
+                                paused = true
+                            elsif key == ' '
+                                paused = !paused
                             end
                         end
                     end
