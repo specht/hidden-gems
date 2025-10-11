@@ -18,7 +18,7 @@ RUN apt-get update \
       nodejs npm \
       default-jdk \
       lua5.4 \
-      libc6 libstdc++6 libgcc-s1 zlib1g libssl3 \
+      libc6 libstdc++6 libgcc-s1 cmake zlib1g libssl3 \
       rsync wget golang nodejs php \
  && rm -rf /var/lib/apt/lists/*
 
