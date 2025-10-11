@@ -189,7 +189,7 @@ class Runner
     UI_BACKGROUND_TOP = '#1d5479'
     UI_FOREGROUND_TOP = '#eeeeec'
     UI_BACKGROUND_BOTTOM = '#232626'
-    UI_FOREGROUND_BOTTOM = '#55beed'
+    UI_FOREGROUND_BOTTOM = '#d3d7cf'
 
     PORTAL_EMOJIS = ['🔴', '🔵', '🟢', '🟡']
     ANTENNA_EMOJI = '📡'
