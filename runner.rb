@@ -392,7 +392,7 @@ class Runner
             @tile_width = 2
 
             if @ansi_log_path
-                @terminal_width = 80
+                @terminal_width = 100
                 @terminal_height = @height + 2
             end
 
@@ -1190,7 +1190,8 @@ class Runner
         if @ansi_log_path
             path = @ansi_log_path.sub('.json.gz', "-#{@seed.to_s(36)}.json.gz")
             Zlib::GzipWriter.open(path) do |f|
-                f.write(@ansi_log.to_json)
+                data = {:width => @terminal_width, :height => @terminal_height, :frames => @ansi_log}
+                f.write(data.to_json)
             end
         end
         results
