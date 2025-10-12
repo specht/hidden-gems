@@ -17,6 +17,7 @@ require 'optparse'
 require 'paint'
 require 'set'
 require 'stringio'
+require 'strscan'
 require 'unicode/display_width'
 require 'yaml'
 require 'zlib'
@@ -25,6 +26,8 @@ SOFT_LIMIT            = 0.100
 HARD_LIMIT            = 0.200
 HARD_LIMIT_FIRST_TICK = 20.0
 OVERTIME_BUDGET       = 1.5
+
+ANSI = /\e\[[0-9;:<>?]*[@-~]/
 
 $timings = Timings.new
 
@@ -387,8 +390,8 @@ class Runner
             @tile_width = 2
 
             if @ansi_log_path
-                @terminal_width = @width * @tile_width + 0
-                @terminal_height = @height + 1
+                @terminal_width = @width * @tile_width + 40
+                @terminal_height = @height + 2
             end
 
             @enable_chatlog = false
@@ -480,6 +483,30 @@ class Runner
         Unicode::DisplayWidth.of(str.to_s, emoji: true, ambwidth: 1)
     end
 
+    def trim_ansi_to_width(str, max_width)
+        ss      = StringScanner.new(str)
+        out     = +""
+        width   = 0
+
+        graphemes = ->(s) { s.respond_to?(:each_grapheme_cluster) ? s.each_grapheme_cluster : s.each_char }
+
+        until ss.eos?
+            if ss.scan(ANSI)
+                out << ss.matched
+                next
+            end
+
+            start_pos = ss.pos
+            char = ss.getch
+            w = vwidth(char)
+            break if width + w > max_width
+            out << char
+            width += w
+        end
+
+        [out, width]
+    end
+
     # Split an overlong token into visual-width chunks, preserving all characters.
     def chunk_token(token, limit)
         return [token] if vwidth(token) <= limit || limit <= 0
@@ -552,30 +579,30 @@ class Runner
 
             score_s = @bots.map { |x| "#{x[:emoji]} #{x[:score]}" }.join(' : ')
 
-            status_line = [
-                [
-                    Paint['  ', fg_bottom_mix, UI_BACKGROUND_TOP],
-                    Paint['Stage: ', UI_FOREGROUND_TOP, UI_BACKGROUND_TOP, :bold],
-                    Paint[@stage_key, UI_FOREGROUND_TOP, UI_BACKGROUND_TOP],
-                ],
-                [
-                    Paint['Seed: ', UI_FOREGROUND_TOP, UI_BACKGROUND_TOP, :bold],
-                    Paint[@seed.to_s(36), UI_FOREGROUND_TOP, UI_BACKGROUND_TOP],
-                ],
-                [
-                    Paint['Tick: ', UI_FOREGROUND_TOP, UI_BACKGROUND_TOP, :bold],
-                    Paint[sprintf("%#{(@max_ticks - 1).to_s.size}d", tick), UI_FOREGROUND_TOP, UI_BACKGROUND_TOP],
-                ],
-                [
-                    Paint['Score: ', UI_FOREGROUND_TOP, UI_BACKGROUND_TOP, :bold],
-                    Paint[score_s, UI_FOREGROUND_TOP, UI_BACKGROUND_TOP],
-                ],
-            ].map { |x| x.join('') }.join(Paint['  |  ', UI_FOREGROUND_TOP, UI_BACKGROUND_TOP])
-            while strip_ansi(status_line).size > @terminal_width && status_line.size > 10
-                status_line = status_line[0..-2]
+            $timings.profile("render: upper status bar") do
+                status_line = [
+                    [
+                        Paint['  ', fg_bottom_mix, UI_BACKGROUND_TOP],
+                        Paint['Stage: ', UI_FOREGROUND_TOP, UI_BACKGROUND_TOP, :bold],
+                        Paint[@stage_key, UI_FOREGROUND_TOP, UI_BACKGROUND_TOP],
+                    ],
+                    [
+                        Paint['Seed: ', UI_FOREGROUND_TOP, UI_BACKGROUND_TOP, :bold],
+                        Paint[@seed.to_s(36), UI_FOREGROUND_TOP, UI_BACKGROUND_TOP],
+                    ],
+                    [
+                        Paint['Tick: ', UI_FOREGROUND_TOP, UI_BACKGROUND_TOP, :bold],
+                        Paint[sprintf("%#{(@max_ticks - 1).to_s.size}d", tick), UI_FOREGROUND_TOP, UI_BACKGROUND_TOP],
+                    ],
+                    [
+                        Paint['Score: ', UI_FOREGROUND_TOP, UI_BACKGROUND_TOP, :bold],
+                        Paint[score_s, UI_FOREGROUND_TOP, UI_BACKGROUND_TOP],
+                    ],
+                ].map { |x| x.join('') }.join(Paint['  |  ', UI_FOREGROUND_TOP, UI_BACKGROUND_TOP])
+                trimmed, vis = trim_ansi_to_width(status_line, @terminal_width)
+                status_line = trimmed + Paint[' ' * [@terminal_width - vis, 0].max, UI_FOREGROUND_TOP, UI_BACKGROUND_TOP]
+                io.puts status_line
             end
-            status_line += Paint[' ' * [(@terminal_width - vwidth(strip_ansi(status_line))), 0].max, UI_FOREGROUND_TOP, UI_BACKGROUND_TOP]
-            io.puts status_line
 
             paint_rng = PCG32.new(1234)
 
@@ -589,81 +616,94 @@ class Runner
             end
 
             bot_with_initiative = ((@tick + (@swap_bots ? 1 : 0)) % @bots.size)
+            @wall_color_cache ||= {}
+            @fog_of_war_cache ||= {}
 
-            (0...@height).each do |y|
-                (0...@width).each do |x|
-                    c = ' ' * @tile_width
-                    bg = FLOOR_COLOR
-                    if @maze.include?((y << 16) | x)
-                        bg = mix_rgb_hex(WALL_COLOR, '#000000', paint_rng.next_float() * 0.25)
-                    end
-                    (0...@bots.size).each do |_k|
-                        i = (_k + bot_with_initiative) % @bots.size
-                        bot = @bots[i]
-                        next if bot[:disqualified_for]
-                        p = bot[:position]
-                        if p[0] == x && p[1] == y
-                            c = @bots[i][:emoji]
-                            while vwidth(c) < @tile_width
-                                c += ' '
+            $timings.profile("render: main screen") do
+                (0...@height).each do |y|
+                    (0...@width).each do |x|
+                        c = ' ' * @tile_width
+                        bg = FLOOR_COLOR
+                        offset = (y << 16) | x
+                        if @maze.include?(offset)
+                            unless @wall_color_cache.include?(offset)
+                                @wall_color_cache[offset] = mix_rgb_hex(WALL_COLOR, '#000000', paint_rng.next_float() * 0.25)
+                            end
+                            bg = @wall_color_cache[offset]
+                        end
+                        $timings.profile("find bots") do
+                            (0...@bots.size).each do |_k|
+                                i = (_k + bot_with_initiative) % @bots.size
+                                bot = @bots[i]
+                                next if bot[:disqualified_for]
+                                p = bot[:position]
+                                if p[0] == x && p[1] == y
+                                    c = @bots[i][:emoji]
+                                    while vwidth(c) < @tile_width
+                                        c += ' '
+                                    end
+                                end
                             end
                         end
-                    end
-                    @gems.each.with_index do |p, i|
-                        if p[:position][0] == x && p[:position][1] == y
-                            c = GEM_EMOJI
-                            while vwidth(c) < @tile_width
-                                c += ' '
+                        $timings.profile("find gems") do
+                            @gems.each.with_index do |p, i|
+                                if p[:position][0] == x && p[:position][1] == y
+                                    c = GEM_EMOJI
+                                    while vwidth(c) < @tile_width
+                                        c += ' '
+                                    end
+                                end
+                                if @emit_signals
+                                    if signal_level[i].include?((y << 16) | x)
+                                        bg = mix_rgb_hex(GEM_COLOR, bg, 1.0 - signal_level[i][(y << 16) | x])
+                                    end
+                                end
                             end
                         end
-                        if @emit_signals
-                            if signal_level[i].include?((y << 16) | x)
-                                bg = mix_rgb_hex(GEM_COLOR, bg, 1.0 - signal_level[i][(y << 16) | x])
-                            end
+                        unless @tiles_revealed.any? { |s| s.include?((y << 16) | x) }
+                            @fog_of_war_cache[bg] ||= mix_rgb_hex(bg, '#000000', 0.5)
+                            bg = @fog_of_war_cache[bg]
                         end
+                        io.print Paint[c, nil, bg]
                     end
-                    unless @tiles_revealed.any? { |s| s.include?((y << 16) | x) }
-                        bg = mix_rgb_hex(bg, '#000000', 0.5)
-                    end
-                    io.print Paint[c, nil, bg]
-                end
-                if @enable_chatlog && @chatlog_position == :right
-                    io.print ' '
-                    s = chat_lines[y] || ''
-                    s += ' ' * (@chatlog_width - vwidth(strip_ansi(s)))
+                    if @enable_chatlog && @chatlog_position == :right
+                        io.print ' '
+                        s = chat_lines[y] || ''
+                        s += ' ' * (@chatlog_width - vwidth(strip_ansi(s)))
 
-                    io.print s
+                        io.print s
+                    end
+                    io.puts
                 end
-                io.puts
             end
 
-            status_line = [
-                [
-                    Paint['  ', fg_bottom_mix, UI_BACKGROUND_BOTTOM],
-                    Paint['[Q]', UI_FOREGROUND_BOTTOM, UI_BACKGROUND_BOTTOM],
-                    Paint[' Quit', fg_bottom_mix, UI_BACKGROUND_BOTTOM],
-                ],
-                [
-                    Paint['[Space]', UI_FOREGROUND_BOTTOM, UI_BACKGROUND_BOTTOM],
-                    Paint[' Pause', fg_bottom_mix, UI_BACKGROUND_BOTTOM],
-                ],
-                [
-                    Paint['[←][→]', UI_FOREGROUND_BOTTOM, UI_BACKGROUND_BOTTOM],
-                    Paint[' Step', fg_bottom_mix, UI_BACKGROUND_BOTTOM],
-                ],
-                [
-                    Paint['[Home]', UI_FOREGROUND_BOTTOM, UI_BACKGROUND_BOTTOM],
-                    Paint[' Rewind', fg_bottom_mix, UI_BACKGROUND_BOTTOM],
-                ],
-                [
-                    Paint[@bots.map.with_index { |x, i| "#{x[:emoji]} #{((@protocol[i][-2] || {})[:bots] || {})[:response]}" }.join(' : '), UI_FOREGROUND_BOTTOM, UI_BACKGROUND_BOTTOM]
-                ],
-            ].map { |x| x.join('') }.join(Paint['  |  ', fg_bottom_mix, UI_BACKGROUND_BOTTOM])
-            while strip_ansi(status_line).size > @terminal_width && status_line.size > 10
-                status_line = status_line[0..-2]
+            $timings.profile("render: lower status bar") do
+                status_line = [
+                    [
+                        Paint['  ', fg_bottom_mix, UI_BACKGROUND_BOTTOM],
+                        Paint['[Q]', UI_FOREGROUND_BOTTOM, UI_BACKGROUND_BOTTOM],
+                        Paint[' Quit', fg_bottom_mix, UI_BACKGROUND_BOTTOM],
+                    ],
+                    [
+                        Paint['[Space]', UI_FOREGROUND_BOTTOM, UI_BACKGROUND_BOTTOM],
+                        Paint[' Pause', fg_bottom_mix, UI_BACKGROUND_BOTTOM],
+                    ],
+                    [
+                        Paint['[←][→]', UI_FOREGROUND_BOTTOM, UI_BACKGROUND_BOTTOM],
+                        Paint[' Step', fg_bottom_mix, UI_BACKGROUND_BOTTOM],
+                    ],
+                    [
+                        Paint['[Home]', UI_FOREGROUND_BOTTOM, UI_BACKGROUND_BOTTOM],
+                        Paint[' Rewind', fg_bottom_mix, UI_BACKGROUND_BOTTOM],
+                    ],
+                    [
+                        Paint[@bots.map.with_index { |x, i| "#{x[:emoji]} #{((@protocol[i][-2] || {})[:bots] || {})[:response]}" }.join(' : '), UI_FOREGROUND_BOTTOM, UI_BACKGROUND_BOTTOM]
+                    ],
+                ].map { |x| x.join('') }.join(Paint['  |  ', fg_bottom_mix, UI_BACKGROUND_BOTTOM])
+                trimmed, vis = trim_ansi_to_width(status_line, @terminal_width)
+                status_line = trimmed + Paint[' ' * [@terminal_width - vis, 0].max, UI_FOREGROUND_BOTTOM, UI_BACKGROUND_BOTTOM]
+                io.print status_line
             end
-            status_line += Paint[' ' * [(@terminal_width - vwidth(strip_ansi(status_line))), 0].max, UI_FOREGROUND_BOTTOM, UI_BACKGROUND_BOTTOM]
-            io.print status_line
 
             if @enable_chatlog && @chatlog_position == :bottom
                 chat_lines.each do |line|
@@ -869,7 +909,10 @@ class Runner
 
                     # STEP 2: RENDER
                     if @verbose >= 2 || @ansi_log_path
-                        screen = render(running_tick, signal_level)
+                        screen = nil
+                        $timings.profile("render screen") do
+                            screen = render(running_tick, signal_level)
+                        end
                         # @protocol.last[:screen] = screen
                         if @verbose >= 2
                             print screen
@@ -1124,7 +1167,8 @@ class Runner
             end
         end
         if @ansi_log_path
-            File.open(@ansi_log_path, 'w') do |f|
+            path = @ansi_log_path.sub('.json.gz', "-#{@seed.to_s(36)}.json.gz")
+            Zlib::GzipWriter.open(path) do |f|
                 f.write(@ansi_log.to_json)
             end
         end
@@ -1277,7 +1321,7 @@ OptionParser.new do |opts|
     opts.on("--[no-]announcer", "Add announcer to chat log (default: #{options[:announcer_enabled]})") do |x|
         options[:announcer_enabled] = x
     end
-    opts.on("--ansi-log-path PATH", "Write ANSI and stdin log to JSON file") do |x|
+    opts.on("--ansi-log-path PATH", "Write ANSI and stdin log to JSON file (ends in .json.gz)") do |x|
         options[:ansi_log_path] = x
     end
     opts.on("--[no-]show-timings", "Show timings after run (default: #{options[:show_timings]})") do |x|
