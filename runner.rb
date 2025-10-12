@@ -7,6 +7,9 @@ $LOAD_PATH.unshift File.expand_path("include/paint-2.3.0/lib", __dir__)
 require './include/fov_angle.rb'
 require './include/pcg32.rb'
 require './include/timings.rb'
+if Gem.win_platform?
+    require 'fiddle/import'
+end
 
 require 'digest'
 require 'fileutils'
@@ -70,7 +73,6 @@ end
 module KeyInput
     if Gem.win_platform?
         module Windows
-            require 'fiddle/import'
             extend self
 
             module User32
@@ -612,7 +614,9 @@ class Runner
 
             chat_lines = nil
             if @enable_chatlog
-                chat_lines = render_chatlog(@chatlog, @chatlog_width, @chatlog_height)
+                $timings.profile("render: chat log") do
+                    chat_lines = render_chatlog(@chatlog, @chatlog_width, @chatlog_height)
+                end
             end
 
             bot_with_initiative = ((@tick + (@swap_bots ? 1 : 0)) % @bots.size)
