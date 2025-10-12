@@ -557,17 +557,36 @@ class Runner
     end
 
     def render_chatlog(entries, width, height)
-        lines = []
-        prev_emoji = nil
+        return [] if height.to_i <= 0
 
+        show_prefix = []
+        prev_emoji = nil
         entries.each do |e|
-            show_prefix = (e[:emoji] != prev_emoji)
-            lines.concat(wrap_entry(e[:text], e[:emoji], width, show_prefix: show_prefix))
+            show_prefix << (e[:emoji] != prev_emoji)
             prev_emoji = e[:emoji]
         end
 
-        lines.last([height, 0].max)
+        need   = height
+        chunks = []
+
+        (entries.length - 1).downto(0) do |i|
+            e = entries[i]
+            lines = wrap_entry(e[:text], e[:emoji], width, show_prefix: show_prefix[i])
+
+            if lines.length >= need
+                chunks << lines.last(need)
+                need = 0
+                break
+            else
+                chunks << lines
+                need -= lines.length
+            end
+        end
+
+        result = chunks.reverse.flatten
+        result.last(height)
     end
+
 
     def strip_ansi(str)
         str.gsub(/\e\[[0-9;]*[A-Za-z]/, '')
@@ -614,9 +633,7 @@ class Runner
 
             chat_lines = nil
             if @enable_chatlog
-                $timings.profile("render: chat log") do
-                    chat_lines = render_chatlog(@chatlog, @chatlog_width, @chatlog_height)
-                end
+                chat_lines = render_chatlog(@chatlog, @chatlog_width, @chatlog_height)
             end
 
             bot_with_initiative = ((@tick + (@swap_bots ? 1 : 0)) % @bots.size)
