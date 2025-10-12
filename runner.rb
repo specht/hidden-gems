@@ -390,7 +390,7 @@ class Runner
             @tile_width = 2
 
             if @ansi_log_path
-                @terminal_width = @width * @tile_width + 40
+                @terminal_width = 80
                 @terminal_height = @height + 2
             end
 
