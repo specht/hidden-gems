@@ -957,7 +957,9 @@ class Runner
 
                     # STEP 3: QUERY BOTS: send data, get response, move but don't collect
 
-                    @bots.each.with_index do |bot, i|
+                    (0...@bots.size).each do |_i|
+                        i = (_i + bot_with_initiative) % @bots.size
+                        bot = @bots[i]
                         next if bot[:disqualified_for]
                         bot_position = bot[:position]
 
@@ -1065,7 +1067,16 @@ class Runner
                                 dy = bot_position[1] + dir[command][1]
                                 if dx >= 0 && dy >= 0 && dx < @width && dy < @height
                                     unless @maze.include?((dy << 16) | dx)
-                                        @bots[i][:position] = [dx, dy]
+                                        target_occupied_by_bot = nil
+                                        (0...@bots.size).each do |other|
+                                            next if other == i
+                                            if @bots[other][:position][0] == dx && @bots[other][:position][1] == dy
+                                                target_occupied_by_bot = other
+                                            end
+                                        end
+                                        if target_occupied_by_bot.nil?
+                                            @bots[i][:position] = [dx, dy]
+                                        end
                                     end
                                 end
                             elsif command == 'WAIT'
