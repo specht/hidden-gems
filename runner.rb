@@ -1116,8 +1116,10 @@ class Runner
                         gem[:ttl] <= 0
                     end
 
-                    if @rng.next_float() < @gem_spawn_rate && @gems.size < @max_gems
-                        ttl_spawned += add_gem()
+                    if @rng.next_float() < @gem_spawn_rate
+                        if @gems.size < @max_gems
+                            ttl_spawned += add_gem()
+                        end
                     end
                 end
                 if @verbose >= 2
