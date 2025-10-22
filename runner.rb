@@ -382,6 +382,19 @@ class Runner
                 end
             end
 
+            # pre-calculate gem spawns
+            @gem_fel = []
+            (0...@max_ticks).each do |t|
+                if @rng.next_float() < @gem_spawn_rate
+                    candidate_tiles = @floor_tiles_set.dup
+                    position_offset = @rng.sample(candidate_tiles.to_a.sort)
+                    ttl = @gem_ttl
+                    @gem_fel << {:tick => t, :offset => position_offset, :ttl => ttl}
+                end
+            end
+            # we're waiting to spawn the gem at @gem_fel_index
+            @gem_fel_index = 0
+
             begin
                 @terminal_height, @terminal_width = $stdout.winsize
             rescue
@@ -681,6 +694,15 @@ class Runner
                                 end
                             end
                         end
+                        # visible_count = 0
+                        # (0...@bots.size).each do |_k|
+                        #     i = (_k + bot_with_initiative) % @bots.size
+                        #     bot = @bots[i]
+                        #     if (@visibility[(bot[:position][1] << 16) | bot[:position][0]] || Set.new()).include?((y << 16) | x)
+                        #         visible_count += 1
+                        #     end
+                        # end
+                        # bg = mix_rgb_hex(bg, '#000000', 1.0 - ((visible_count.to_f / @bots.size.to_f) * 0.5 + 0.5))
                         unless @tiles_revealed.any? { |s| s.include?((y << 16) | x) }
                             @fog_of_war_cache[bg] ||= mix_rgb_hex(bg, '#000000', 0.5)
                             bg = @fog_of_war_cache[bg]
@@ -752,19 +774,60 @@ class Runner
         end
     end
 
-    def add_gem()
-        candidate_tiles = @floor_tiles_set.dup
-        # don't spawn gem near bot
-        @bots.each do |bot|
-            candidate_tiles.delete((bot[:position][1] << 16) | bot[:position][0])
-        end
-        # don't spawn gem on another gem
-        @gems.each do |gem|
-            candidate_tiles.delete((gem[:position][1] << 16) | gem[:position][0])
-        end
-        return 0 if candidate_tiles.empty?
-        gem = {:position_offset => @rng.sample(candidate_tiles.to_a.sort), :ttl => @gem_ttl}
+    def spawn_gem()
+        spawn_data = @gem_fel[@gem_fel_index]
+        @gem_fel_index += 1
+
+        gem = {:position_offset => spawn_data[:offset], :ttl => spawn_data[:ttl]}
         gem[:position] = [gem[:position_offset] & 0xFFFF, gem[:position_offset] >> 16]
+
+        # Attention: if there happens to be a gem or a bot already at this position,
+        # let's find another position nearby.
+        occupied_points = Set.new()
+        @gems.each do |g|
+            occupied_points << ((g[:position][1] << 16) | g[:position][0])
+        end
+        @bots.each do |b|
+            occupied_points << ((b[:position][1] << 16) | b[:position][0])
+        end
+
+        dist_field = {}
+        wavefront = Set.new()
+        wavefront << [gem[:position][0], gem[:position][1]]
+        dist_field[(gem[:position][1] << 16) | gem[:position][0]] = 0
+        distance = 0
+        good = false
+        while (occupied_points.include?(gem[:position_offset])) && (!wavefront.empty?)
+            new_wavefront = Set.new()
+            wavefront.each do |p|
+                px = p[0]
+                py = p[1]
+                candidates = [[-1, 0], [1, 0], [0, -1], [0, 1]]
+                @rng.shuffle!(candidates)
+                candidates.each do |d|
+                    dx = px + d[0]
+                    dy = py + d[1]
+                    if dx >= 0 && dy >= 0 && dx < @width && dy < @height
+                        offset = (dy << 16) | dx
+                        if !dist_field.include?(offset) && !@maze.include?(offset)
+                            dist_field[offset] = distance
+                            new_wavefront << [dx, dy]
+                            unless occupied_points.include?(offset)
+                                gem[:position_offset] = offset
+                                gem[:position] = [dx, dy]
+                                good = true
+                                break
+                            end
+                        end
+                    end
+                    break if good
+                end
+                break if good
+            end
+            break if good
+            wavefront = new_wavefront
+            distance += 1
+        end
 
         # pre-calculate gem level
         level = {}
@@ -1116,9 +1179,11 @@ class Runner
                         gem[:ttl] <= 0
                     end
 
-                    if @rng.next_float() < @gem_spawn_rate
-                        if @gems.size < @max_gems
-                            ttl_spawned += add_gem()
+                    if @gems.size < @max_gems
+                        if @gem_fel_index < @gem_fel.size
+                            if @tick >= @gem_fel[@gem_fel_index][:tick]
+                                ttl_spawned += spawn_gem()
+                            end
                         end
                     end
                 end
