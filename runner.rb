@@ -258,7 +258,7 @@ class Runner
                    signal_noise:, signal_cutoff:, signal_fade:, swap_bots:,
                    cache:, profile:, check_determinism:, use_docker:,
                    rounds:, verbose:, max_tps:, announcer_enabled:,
-                   ansi_log_path:, show_timings:
+                   ansi_log_path:, show_timings:, start_paused:
                    )
         @seed = seed
         @width = width
@@ -293,6 +293,7 @@ class Runner
         @ansi_log_path = ansi_log_path
         @ansi_log = []
         @show_timings = show_timings
+        @start_paused = start_paused
     end
 
     def gen_maze
@@ -933,7 +934,7 @@ class Runner
             end
         end
         frames = []
-        paused = false
+        paused = @start_paused
         begin
             print "\033[?25l" if @verbose >= 2
             loop do
@@ -1306,6 +1307,7 @@ options = {
     announcer_enabled: true,
     ansi_log_path: nil,
     show_timings: false,
+    start_paused: false,
 }
 
 unless ARGV.include?('--stage')
@@ -1426,6 +1428,9 @@ OptionParser.new do |opts|
     end
     opts.on("--[no-]show-timings", "Show timings after run (default: #{options[:show_timings]})") do |x|
         options[:show_timings] = x
+    end
+    opts.on("--[no-]start-paused", "Start the runner in paused mode (default: #{options[:start_paused]})") do |x|
+        options[:start_paused] = x
     end
 end.parse!
 
