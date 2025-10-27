@@ -203,6 +203,9 @@ class Runner
     GEM_COLOR = '#238acc'
     FLOOR_COLOR = '#222728'
     WALL_COLOR = '#555753'
+    HIGHLIGHT_COLOR_A = '#d0d0d0'
+    HIGHLIGHT_COLOR_B = '#d0d0d0'
+    HIGHLIGHT_COLOR_MIX = '#ffffff'
     COMMENT_SINGLE = [
         "Always curious, never standing still.",
         "Ready to chase the signal, no matter where it leads.",
@@ -352,9 +355,6 @@ class Runner
             @spawn_points.map! do |offset|
                 [offset & 0xFFFF, offset >> 16]
             end
-            if @swap_bots
-                @spawn_points.reverse!
-            end
             @message_queue = Queue.new
 
             visibility_path = "cache/#{@checksum}.marshal.gz"
@@ -495,6 +495,17 @@ class Runner
         format("#%02X%02X%02X", r, g, b)
     end
 
+    def mul_rgb_hex(c1, c2)
+        x = c1[1..].scan(/../).map { |h| h.to_i(16) }
+        y = c2[1..].scan(/../).map { |h| h.to_i(16) }
+
+        r = (x[0] * (y[0] / 255.0)).round.clamp(0, 255)
+        g = (x[1] * (y[1] / 255.0)).round.clamp(0, 255)
+        b = (x[2] * (y[2] / 255.0)).round.clamp(0, 255)
+
+        format("#%02X%02X%02X", r, g, b)
+    end
+
     def vwidth(str)
         Unicode::DisplayWidth.of(str.to_s, emoji: true, ambwidth: 1)
     end
@@ -606,7 +617,7 @@ class Runner
         str.gsub(/\e\[[0-9;]*[A-Za-z]/, '')
     end
 
-    def render(tick, signal_level)
+    def render(tick, signal_level, paused)
         fg_top_mix = mix_rgb_hex(UI_FOREGROUND_TOP, UI_BACKGROUND_TOP, 0.5)
         fg_bottom_mix = mix_rgb_hex(UI_FOREGROUND_BOTTOM, UI_BACKGROUND_BOTTOM, 0.5)
         StringIO.open do |io|
@@ -650,9 +661,11 @@ class Runner
                 chat_lines = render_chatlog(@chatlog, @chatlog_width, @chatlog_height)
             end
 
-            bot_with_initiative = ((@tick + (@swap_bots ? 1 : 0)) % @bots.size)
+            bot_with_initiative = @tick % @bots.size
             @wall_color_cache ||= {}
             @fog_of_war_cache ||= {}
+            @bg_fade ||= {}
+            @bg_highlight ||= {}
 
             $timings.profile("render: main screen") do
                 (0...@height).each do |y|
@@ -695,19 +708,37 @@ class Runner
                                 end
                             end
                         end
-                        # visible_count = 0
-                        # (0...@bots.size).each do |_k|
-                        #     i = (_k + bot_with_initiative) % @bots.size
-                        #     bot = @bots[i]
-                        #     if (@visibility[(bot[:position][1] << 16) | bot[:position][0]] || Set.new()).include?((y << 16) | x)
-                        #         visible_count += 1
-                        #     end
-                        # end
-                        # bg = mix_rgb_hex(bg, '#000000', 1.0 - ((visible_count.to_f / @bots.size.to_f) * 0.5 + 0.5))
-                        unless @tiles_revealed.any? { |s| s.include?((y << 16) | x) }
-                            @fog_of_war_cache[bg] ||= mix_rgb_hex(bg, '#000000', 0.5)
-                            bg = @fog_of_war_cache[bg]
+                        highlight_color = nil
+                        (0...@bots.size).each do |_k|
+                            i = _k
+                            bot = @bots[i]
+                            next if bot[:disqualified_for]
+                            if (@visibility[(bot[:position][1] << 16) | bot[:position][0]] || Set.new()).include?((y << 16) | x)
+                                if @bots.size == 2
+                                    if highlight_color.nil?
+                                        highlight_color = [HIGHLIGHT_COLOR_A, HIGHLIGHT_COLOR_B][i]
+                                    else
+                                        highlight_color = HIGHLIGHT_COLOR_MIX
+                                    end
+                                else
+                                    highlight_color = '#ffffff'
+                                end
+                            end
                         end
+                        @bg_highlight[offset] = highlight_color if highlight_color
+                        if highlight_color.nil?
+                            @bg_fade[offset] ||= 0.0
+                            @bg_fade[offset] *= paused ? 0 : 0.5
+                        else
+                            @bg_fade[offset] = 1.0
+                        end
+                        cache_key_0 = "#{bg}/#000000/32"
+                        @fog_of_war_cache[cache_key_0] ||= mix_rgb_hex(bg, '#000000', 0.5)
+                        cache_key_1 = "#{bg}/#{@bg_highlight[offset] || '#ffffff'}/m"
+                        @fog_of_war_cache[cache_key_1] ||= mul_rgb_hex(bg, @bg_highlight[offset] || '#ffffff')
+                        cache_key_2 = "#{@fog_of_war_cache[cache_key_0]}/#{@fog_of_war_cache[cache_key_1]}/#{(@bg_fade[offset] * 64).round}"
+                        @fog_of_war_cache[cache_key_2] ||= mix_rgb_hex(@fog_of_war_cache[cache_key_0], @fog_of_war_cache[cache_key_1], @bg_fade[offset])
+                        bg = @fog_of_war_cache[cache_key_2]
                         io.print Paint[c, nil, bg]
                     end
                     if @enable_chatlog && @chatlog_position == :right
@@ -996,7 +1027,7 @@ class Runner
                     if @verbose >= 2 || @ansi_log_path
                         screen = nil
                         $timings.profile("render screen") do
-                            screen = render(running_tick, signal_level)
+                            screen = render(running_tick, signal_level, paused)
                         end
                         # @protocol.last[:screen] = screen
                         if @verbose >= 2
@@ -1017,7 +1048,7 @@ class Runner
 
                     break if @bots.all? { |b| b[:disqualified_for] }
 
-                    bot_with_initiative = ((@tick + (@swap_bots ? 1 : 0)) % @bots.size)
+                    bot_with_initiative = @tick % @bots.size
 
                     # STEP 3: QUERY BOTS: send data, get response, move but don't collect
 
@@ -1437,6 +1468,8 @@ end.parse!
 bot_paths = ARGV.map do |x|
     File.expand_path(x)
 end
+
+bot_paths.reverse! if options[:swap_bots]
 
 if bot_paths.empty?
     bot_paths << "random-walker"
