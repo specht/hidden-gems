@@ -431,6 +431,8 @@ class Runner
                     @chatlog_height = @terminal_height - @height - 1
                 end
             end
+            # @enable_chatlog = false
+            # @terminal_width = @width * @tile_width
         end
     end
 
@@ -1076,7 +1078,6 @@ class Runner
                             data[:floor] = []
                             data[:initiative] = (bot_with_initiative == i)
                             data[:visible_gems] = []
-
                             @visibility[(bot_position[1] << 16) | bot_position[0]].each do |t|
                                 key = @maze.include?(t) ? :wall : :floor
                                 data[key] << [t & 0xFFFF, t >> 16]
@@ -1093,14 +1094,29 @@ class Runner
                                 end
                                 data[:signal_level] = format("%.6f", level_sum).to_f
                             end
+                            if @bots.size > 1
+                                data[:other_bots] = []
+                                (0...@bots.size).each do |j|
+                                    next if j == i
+                                    other_bot = @bots[j]
+                                    if other_bot[:disqualified_for].nil?
+                                        bx = other_bot[:position][0]
+                                        by = other_bot[:position][1]
+                                        if @visibility[(bot_position[1] << 16) | bot_position[0]].include?((by << 16) | bx)
+                                            data[:other_bots] << {:position => other_bot[:position], :emoji => other_bot[:emoji]}
+                                        end
+                                    end
+                                end
+                            end
+                        end
+
+                        if @ansi_log_path && i == 0
+                            @ansi_log.last[:stdin] = data
                         end
 
                         start_mono = Process.clock_gettime(Process::CLOCK_MONOTONIC)
                         deadline_mono = start_mono + (@tick == 0 ? HARD_LIMIT_FIRST_TICK : HARD_LIMIT)
 
-                        if @ansi_log_path
-                            @ansi_log.last[:stdin] = data
-                        end
                         $timings.profile("write to bot's stdin") do
                             begin
                                 @bots_io[i].stdin.puts(data.to_json)
