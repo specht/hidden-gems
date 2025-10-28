@@ -472,7 +472,7 @@ class Runner
                 # exit
                 stdin, stdout, stderr, wait_thr = Open3.popen3(*args)
             else
-                stdin, stdout, stderr, wait_thr = Open3.popen3(path, chdir: File.dirname(path))
+                stdin, stdout, stderr, wait_thr = Open3.popen3([path, File.basename(path)], chdir: File.dirname(path))
             end
         end
         stdin.sync = true
