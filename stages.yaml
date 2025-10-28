@@ -1,18 +1,18 @@
 current: stage-0@0.1
 stage-0@0.1:
-    title: System Check
+    title: System Check (v0.1)
     width: 19
     height: 19
     generator: arena
     emit_signals: false
     vis_radius: 100
-    gem_spawn: [0.04, 0.06]
+    gem_spawn_rate: 0.05
 stage-0@0.2:
-    title: System Check (v2)
-    width: [19, 39]
-    max_gems: [1, 5]
+    title: System Check (v0.2)
+    width: 19..39
+    max_gems: 1..5
     height: 19
     generator: arena
     emit_signals: false
     vis_radius: 100
-    gem_spawn: [0.04, 0.06]
+    gem_spawn_rate: 0.04..0.06

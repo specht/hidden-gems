@@ -298,6 +298,28 @@ class Runner
         @show_timings = show_timings
         @start_paused = start_paused
         @demo_mode = @ansi_log_path && File.basename(@ansi_log_path).include?('demo')
+
+        param_rng = PCG32.new(@seed)
+        [:width, :height, :max_ticks, :vis_radius, :gem_ttl, :max_gems,
+         :signal_rfdius, :rounds].each do |_key|
+            key = "@#{_key}".to_sym
+            value = instance_variable_get(key)
+            if value.is_a?(String) && value.include?('..')
+                parts = value.split('..').map { |x| x.strip.to_i }
+                new_value = parts[0] + param_rng.randrange(parts[1] - parts[0] + 1)
+                instance_variable_set(key, new_value)
+            end
+        end
+        [:gem_spawn_rate].each do |_key|
+            key = "@#{_key}".to_sym
+            value = instance_variable_get(key)
+            if value.is_a?(String) && value.include?('..')
+                parts = value.split('..').map { |x| x.strip.to_f }
+                new_value = parts[0] + param_rng.next_float * (parts[1] - parts[0])
+                new_value = (new_value * 100.0).round() / 100.0
+                instance_variable_set(key, new_value)
+            end
+        end
     end
 
     def gen_maze
@@ -1322,6 +1344,11 @@ class Runner
                 data = {:width => @terminal_width, :height => @terminal_height, :frames => @ansi_log}
                 f.write(data.to_json)
             end
+            path = @ansi_log_path.sub('.json.gz', "-#{@seed.to_s(36)}-poster.json.gz")
+            Zlib::GzipWriter.open(path) do |f|
+                data = {:width => @terminal_width, :height => @terminal_height, :frames => [@ansi_log.first]}
+                f.write(data.to_json)
+            end
         end
         results
     end
@@ -1381,11 +1408,7 @@ OptionParser.new do |opts|
         stage.each_pair do |_key, value|
             key = _key.to_sym
             next if key == :title
-            if value.is_a? Integer
-                options[key] = value
-            elsif value.is_a? Float
-                options[key] = value
-            elsif value.is_a? String
+            if value.is_a?(Integer) || value.is_a?(Float) || value.is_a?(String)
                 options[key] = value
             elsif value == true || value == false
                 options[key] = value
