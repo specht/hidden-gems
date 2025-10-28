@@ -297,6 +297,7 @@ class Runner
         @ansi_log = []
         @show_timings = show_timings
         @start_paused = start_paused
+        @demo_mode = @ansi_log_path && File.basename(@ansi_log_path).include?('demo')
     end
 
     def gen_maze
@@ -431,8 +432,10 @@ class Runner
                     @chatlog_height = @terminal_height - @height - 1
                 end
             end
-            # @enable_chatlog = false
-            # @terminal_width = @width * @tile_width
+            if @demo_mode
+                @enable_chatlog = false
+                @terminal_width = @width * @tile_width
+            end
         end
     end
 
