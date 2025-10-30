@@ -60,6 +60,15 @@ RUN set -eux; \
     mkdir -p "$JULIA_DEPOT_PATH"; \
     julia -e 'using Pkg; Pkg.add("JSON"); using JSON; Pkg.precompile()'
 
+# Install zig 0.15.2
+ARG ZIG_VERSION=0.15.2
+
+RUN curl -LO https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz && \
+    tar -xf zig-x86_64-linux-${ZIG_VERSION}.tar.xz && \
+    mv zig-x86_64-linux-${ZIG_VERSION} /opt/zig && \
+    ln -s /opt/zig/zig /usr/local/bin/zig && \
+    rm zig-x86_64-linux-${ZIG_VERSION}.tar.xz
+
 RUN sed -i 's/# \(en_US.UTF-8 UTF-8\)/\1/' /etc/locale.gen \
  && locale-gen
 
