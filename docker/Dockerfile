@@ -20,7 +20,7 @@ RUN apt-get update \
       lua5.4 \
       libc6 libstdc++6 libgcc-s1 zlib1g libssl3 \
       rsync wget golang nodejs php \
-      fpc fp-units-fcl \
+      fpc fp-units-fcl libjansson-dev \
  && rm -rf /var/lib/apt/lists/*
 
 # Install PowerShell
@@ -42,10 +42,6 @@ RUN wget https://github.com/Kitware/CMake/releases/download/v4.0.4/cmake-4.0.4-l
     && sh cmake-4.0.4-linux-x86_64.sh --skip-license --prefix=/usr/local \
     && rm cmake-4.0.4-linux-x86_64.sh
 
-# # Install .NET SDK
-# RUN apt-get update \
-#     && apt-get install -y dotnet-sdk-9.0
-
 # --- Julia (prebuilt, pinned) ---
 ARG JULIA_VERSION=1.11.7
 ENV JULIA_DEPOT_PATH=/usr/local/julia
@@ -59,6 +55,13 @@ RUN set -eux; \
     rm -f /tmp/julia.tgz; \
     mkdir -p "$JULIA_DEPOT_PATH"; \
     julia -e 'using Pkg; Pkg.add("JSON"); using JSON; Pkg.precompile()'
+
+# Install .NET
+RUN apt-get update && apt-get install -y wget gnupg ca-certificates \
+ && apt-get update \
+ # install .NET 9 runtime (STS). Use 8.0 for LTS.
+ && apt-get install -y dotnet-runtime-9.0 dotnet-sdk-9.0 \
+ && rm -rf /var/lib/apt/lists/*
 
 RUN sed -i 's/# \(en_US.UTF-8 UTF-8\)/\1/' /etc/locale.gen \
  && locale-gen
@@ -76,7 +79,9 @@ RUN chown -R runner:runner /usr/local/julia
 USER runner
 
 RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
-RUN mkdir -p /home/runner/.cargo && echo "[source.crates-io]\nreplace-with = \"vendored-sources\"\n\n[source.vendored-sources]\ndirectory = \"vendor\"" >> /home/runner/.cargo/config
+RUN mkdir -p /home/runner/.cargo && echo "[source.crates-io]\nreplace-with = \"vendored-sources\"\n\n[source.vendored-sources]\ndirectory = \"vendor\"" >> /home/runner/.cargo/config.toml
+
+ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
 
 ENTRYPOINT ["/usr/bin/tini","--"]
 CMD ["/launch.sh"]

@@ -474,8 +474,8 @@ class Runner
                     '--network=none',
                     '--read-only',
                     '--pids-limit=256',
-                    '--memory=256m',
-                    '--memory-swap=256m',
+                    '--memory=512m',
+                    '--memory-swap=512m',
                     '--cpus=1',
                     '--cap-drop=ALL',
                     '--security-opt=no-new-privileges',
@@ -1120,7 +1120,7 @@ class Runner
                                 data[:signal_level] = format("%.6f", level_sum).to_f
                             end
                             if @bots.size > 1
-                                data[:other_bots] = []
+                                data[:visible_bots] = []
                                 (0...@bots.size).each do |j|
                                     next if j == i
                                     other_bot = @bots[j]
@@ -1128,7 +1128,7 @@ class Runner
                                         bx = other_bot[:position][0]
                                         by = other_bot[:position][1]
                                         if @visibility[(bot_position[1] << 16) | bot_position[0]].include?((by << 16) | bx)
-                                            data[:other_bots] << {:position => other_bot[:position], :emoji => other_bot[:emoji]}
+                                            data[:visible_bots] << {:position => other_bot[:position], :emoji => other_bot[:emoji]}
                                         end
                                     end
                                 end
