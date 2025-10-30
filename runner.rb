@@ -301,7 +301,7 @@ class Runner
 
         param_rng = PCG32.new(@seed)
         [:width, :height, :max_ticks, :vis_radius, :gem_ttl, :max_gems,
-         :signal_rfdius, :rounds].each do |_key|
+         :signal_radius, :rounds].each do |_key|
             key = "@#{_key}".to_sym
             value = instance_variable_get(key)
             if value.is_a?(String) && value.include?('..')
@@ -487,7 +487,7 @@ class Runner
                     "--tmpfs", "/home/runner/.dotnet:rw,nosuid,nodev,noexec,size=64m",
                     "--tmpfs", "/home/runner/.nuget:rw,nosuid,nodev,noexec,size=64m",
                     "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=64m",
-                    "--tmpfs", "/app:rw,nosuid,nodev,exec,size=64m,uid=1000,gid=1000,mode=1777",
+                    "--tmpfs", "/app:rw,nosuid,nodev,exec,size=256m,uid=1000,gid=1000,mode=1777",
                     'hidden-gems-runner'
                 ]
                 # STDERR.puts args.join(' ')

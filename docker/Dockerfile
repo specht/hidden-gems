@@ -20,6 +20,7 @@ RUN apt-get update \
       lua5.4 \
       libc6 libstdc++6 libgcc-s1 zlib1g libssl3 \
       rsync wget golang nodejs php \
+      fpc fp-units-fcl \
  && rm -rf /var/lib/apt/lists/*
 
 # Install PowerShell
