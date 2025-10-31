@@ -590,7 +590,7 @@ class Runner
         out = []
         line = +""
 
-        tokens = text.scrub.split(/\s+/).flat_map { |t| chunk_token(t, body_w) }
+        tokens = text.scrub.split(/\s/).flat_map { |t| chunk_token(t, body_w) }
         tokens.each do |tok|
             if line.empty?
                 line = tok.dup
@@ -603,7 +603,7 @@ class Runner
                 end
             end
         end
-        out << line unless line.empty?
+        out << line
 
         out.each_with_index.map { |l, i| (i == 0 ? prefix : indent) + l }
     end
@@ -1294,6 +1294,9 @@ class Runner
                         paused = !paused
                     end
                 rescue
+                end
+                if @bots.all? { |b| b[:disqualified_for] }
+                    break
                 end
             end
             @bots_io.each do |b|
