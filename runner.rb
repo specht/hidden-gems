@@ -203,9 +203,6 @@ class Runner
     GEM_COLOR = '#238acc'
     FLOOR_COLOR = '#222728'
     WALL_COLOR = '#555753'
-    HIGHLIGHT_COLOR_A = '#d0d0d0'
-    HIGHLIGHT_COLOR_B = '#d0d0d0'
-    HIGHLIGHT_COLOR_MIX = '#ffffff'
     COMMENT_SINGLE = [
         "Always curious, never standing still.",
         "Ready to chase the signal, no matter where it leads.",
@@ -261,7 +258,8 @@ class Runner
                    signal_noise:, signal_cutoff:, signal_fade:, swap_bots:,
                    cache:, profile:, check_determinism:, use_docker:,
                    rounds:, verbose:, max_tps:, announcer_enabled:,
-                   ansi_log_path:, show_timings:, start_paused:
+                   ansi_log_path:, show_timings:, start_paused:,
+                   highlight_color:
                    )
         @seed = seed
         @width = width
@@ -297,6 +295,8 @@ class Runner
         @ansi_log = []
         @show_timings = show_timings
         @start_paused = start_paused
+        @highlight_color = highlight_color
+        @faded_highlight_color = mix_rgb_hex(@highlight_color, '#000000', 0.25)
         @demo_mode = @ansi_log_path && File.basename(@ansi_log_path).include?('demo')
 
         param_rng = PCG32.new(@seed)
@@ -743,12 +743,12 @@ class Runner
                             if (@visibility[(bot[:position][1] << 16) | bot[:position][0]] || Set.new()).include?((y << 16) | x)
                                 if @bots.size == 2
                                     if highlight_color.nil?
-                                        highlight_color = [HIGHLIGHT_COLOR_A, HIGHLIGHT_COLOR_B][i]
+                                        highlight_color = @faded_highlight_color
                                     else
-                                        highlight_color = HIGHLIGHT_COLOR_MIX
+                                        highlight_color = @highlight_color
                                     end
                                 else
-                                    highlight_color = '#ffffff'
+                                    highlight_color = @highlight_color
                                 end
                             end
                         end
@@ -1388,6 +1388,7 @@ options = {
     ansi_log_path: nil,
     show_timings: false,
     start_paused: false,
+    highlight_color: '#ffffff',
 }
 
 unless ARGV.include?('--stage')
@@ -1507,6 +1508,13 @@ OptionParser.new do |opts|
     end
     opts.on("--[no-]start-paused", "Start the runner in paused mode (default: #{options[:start_paused]})") do |x|
         options[:start_paused] = x
+    end
+    opts.on("--highlight-color COLOR", String, "Highlight color (default: #{options[:highlight_color]})") do |x|
+        options[:highlight_color] = x
+        unless x =~ /\A#[0-9A-Fa-f]{6}\z/
+            raise OptionParser::InvalidArgument, "Invalid highlight color '#{x}': expected HTML RGB format like #RRGGBB"
+        end
+        options[:highlight_color] = x.downcase
     end
 end.parse!
 
