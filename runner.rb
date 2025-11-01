@@ -257,7 +257,7 @@ class Runner
                    emit_signals:, signal_radius:, signal_quantization:,
                    signal_noise:, signal_cutoff:, signal_fade:, swap_bots:,
                    cache:, profile:, check_determinism:, use_docker:,
-                   rounds:, verbose:, max_tps:, announcer_enabled:,
+                   rounds:, round_seeds:, verbose:, max_tps:, announcer_enabled:,
                    ansi_log_path:, show_timings:, start_paused:,
                    highlight_color:
                    )
@@ -282,6 +282,7 @@ class Runner
         @check_determinism = check_determinism
         @use_docker = use_docker
         @rounds = rounds
+        @round_seeds = round_seeds
         @verbose = verbose
         @max_tps = max_tps
         @bots = []
@@ -1453,6 +1454,7 @@ options = {
     check_determinism: false,
     use_docker: false,
     rounds: 1,
+    round_seeds: nil,
     announcer_enabled: true,
     ansi_log_path: nil,
     show_timings: false,
@@ -1560,6 +1562,10 @@ OptionParser.new do |opts|
     opts.on("-rN", "--rounds N", Integer, "Rounds (default: #{options[:rounds]})") do |x|
         options[:rounds] = x
     end
+    opts.on("--round-seeds SEEDS", String, "Round seeds (comma separated)") do |x|
+        options[:round_seeds] = x.split(',').map { |s| s.strip }
+        options[:rounds] = options[:round_seeds].size
+    end
     opts.on("-vVERBOSE", "--verbose N", Integer, "Verbosity level (default: #{options[:verbose]})") do |x|
         options[:verbose] = x
     end
@@ -1654,7 +1660,11 @@ else
     bot_data = []
 
     options[:rounds].times do |i|
-        options[:seed] = seed_rng.randrange(2 ** 32)
+        if options[:round_seeds]
+            options[:seed] = options[:round_seeds][i].to_i(36)
+        else
+            options[:seed] = seed_rng.randrange(2 ** 32)
+        end
         all_seed << options[:seed]
         runner = Runner.new(**options)
         runner.round = i
