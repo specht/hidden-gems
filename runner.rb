@@ -361,7 +361,7 @@ class Runner
             @rng = PCG32.new(@seed)
             @maze = gen_maze()
             @floor_tiles = []
-            @checksum = Digest::SHA256.hexdigest(@maze.to_json)
+            @checksum = Digest::SHA256.hexdigest(@maze.to_a.sort.to_json)
             (0...@height).each do |y|
                 (0...@width).each do |x|
                     offset = (y << 16) | x
