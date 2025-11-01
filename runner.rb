@@ -993,9 +993,11 @@ class Runner
         end
         frames = []
         paused = @start_paused
+        break_on_tick = nil
         begin
             print "\033[?25l" if @verbose >= 2
             loop do
+                break if break_on_tick && @tick >= break_on_tick
                 tf0 = Time.now.to_f
                 while frames.size <= @tick
                     running_tick = frames.size
@@ -1072,7 +1074,9 @@ class Runner
                         print "\rTick: #{@tick} @ #{@tps} tps"
                     end
 
-                    break if @bots.all? { |b| b[:disqualified_for] }
+                    if @bots.all? { |b| b[:disqualified_for] }
+                        break_on_tick = @tick + 1
+                    end
 
                     bot_with_initiative = @tick % @bots.size
 
@@ -1363,9 +1367,6 @@ class Runner
                         paused = !paused
                     end
                 rescue
-                end
-                if @bots.all? { |b| b[:disqualified_for] }
-                    break
                 end
             end
             @bots_io.each do |b|
