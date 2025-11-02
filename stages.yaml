@@ -1,6 +1,6 @@
-current: stage-0@0.1
 stage-0@0.1:
     title: System Check
+    from: '2025-10-06'
     width: 19
     height: 19
     generator: arena
@@ -9,6 +9,7 @@ stage-0@0.1:
     gem_spawn_rate: 0.05
 stage-0@0.2:
     title: System Check
+    from: '2025-11-03'
     width: 19..39
     max_gems: 1..5
     height: 19

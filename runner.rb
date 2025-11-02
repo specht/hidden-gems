@@ -11,6 +11,7 @@ if Gem.win_platform?
     require 'fiddle/import'
 end
 
+require 'date'
 require 'digest'
 require 'fileutils'
 require "io/console"
@@ -389,15 +390,34 @@ class Runner
             else
                 # pre-calculate visibility from each tile
                 @visibility = {}
-                (0...@height).each do |y|
-                    (0...@width).each do |x|
-                        offset = (y << 16) | x
-                        v = Set.new
-                        unless @maze.include?(offset)
-                            visible = FOVAngle.visible(@width, @height, @maze, x, y, radius: @vis_radius) { |xx, yy| @maze.include?((yy << 16) | xx) }
-                            v = visible.to_a.map { |p| (p[1] << 16) | p[0] }.sort
+                if @generator == 'arena'
+                    inner_field_visibility = nil
+                    (0...@height).each do |y|
+                        (0...@width).each do |x|
+                            offset = (y << 16) | x
+                            v = Set.new()
+                            unless @maze.include?(offset)
+                                if inner_field_visibility.nil?
+                                    visible = FOVAngle.visible(@width, @height, @maze, x, y, radius: @vis_radius) { |xx, yy| @maze.include?((yy << 16) | xx) }
+                                    v = visible.to_a.map { |p| (p[1] << 16) | p[0] }.sort
+                                    inner_field_visibility = v
+                                end
+                                v = inner_field_visibility
+                            end
+                            @visibility[offset] = Set.new(v)
                         end
-                        @visibility[offset] = Set.new(v)
+                    end
+                else
+                    (0...@height).each do |y|
+                        (0...@width).each do |x|
+                            offset = (y << 16) | x
+                            v = Set.new()
+                            unless @maze.include?(offset)
+                                visible = FOVAngle.visible(@width, @height, @maze, x, y, radius: @vis_radius) { |xx, yy| @maze.include?((yy << 16) | xx) }
+                                v = visible.to_a.map { |p| (p[1] << 16) | p[0] }.sort
+                            end
+                            @visibility[offset] = Set.new(v)
+                        end
                     end
                 end
 
@@ -1473,16 +1493,23 @@ write_profile_json_path = nil
 OptionParser.new do |opts|
     opts.banner = "Usage: ./runner.rb [options] /path/to/bot1 [/path/to/bot2]"
 
-    opts.on('--stage STAGE', stages.keys,
-        "Stage (default: #{options[:stage]})") do |x|
+    opts.on('--stage STAGE', stages.keys + ['current'], "Stage (default: #{options[:stage]})") do |x|
         options[:stage] = x
-        options[:stage] = stages['current'] if options[:stage] == 'current'
+        if options[:stage] == 'current'
+            # find latest stage
+            today = Date.today.strftime('%Y-%m-%d')
+            options[:stage] = stages.keys.select do |k|
+                today >= stages[k]['from']
+            end.sort_by do |k|
+                stages[k]['from']
+            end.last
+        end
         stage = stages[options[:stage]]
         stage_key = options[:stage]
         stage_title = stage['title']
         stage.each_pair do |_key, value|
             key = _key.to_sym
-            next if key == :title
+            next if key == :title || key == :from
             if value.is_a?(Integer) || value.is_a?(Float) || value.is_a?(String)
                 options[key] = value
             elsif value == true || value == false
