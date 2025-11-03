@@ -838,7 +838,7 @@ class Runner
     end
 
     def add_bot(path)
-        @bots << {:position => @spawn_points.shift, :score => 0, :name => "Botty McBotface", :emoji => '🤖', :overtime_used => 0.0, :disqualified_for => nil}
+        @bots << {:position => @spawn_points.shift, :score => 0, :name => "Botty McBotface", :emoji => '🤖', :overtime_used => 0.0, :disqualified_for => nil, :response_times => []}
         yaml_path = File.join(File.expand_path(path), 'bot.yaml')
         if File.exist?(yaml_path)
             info = YAML.load(File.read(yaml_path))
@@ -1276,6 +1276,7 @@ class Runner
                         end
 
                         elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - start_mono[i]
+                        @bots[i][:response_times] << elapsed
                         overtime = (@tick == 0) ? 0.0 : (elapsed - SOFT_LIMIT)
                         @bots[i][:overtime_used] += overtime if overtime > 0.0
                         if @announcer_enabled && overtime.to_f > 0.0
@@ -1423,6 +1424,7 @@ class Runner
         @bots.each.with_index do |bot, i|
             results[i][:score] = bot[:score]
             results[i][:disqualified_for] = bot[:disqualified_for]
+            results[i][:response_times] = bot[:response_times].map { |x| (x * 1e9).to_i } # ms
             if @profile
                 results[i][:gem_utilization] = (ttl_spawned > 0 ? (bot[:score].to_f / ttl_spawned.to_f * 100.0 * 100).to_i.to_f / 100 : 0.0)
                 results[i][:tile_coverage] = ((@tiles_revealed[i] & @floor_tiles_set).size.to_f / @floor_tiles_set.size.to_f * 100.0 * 100).to_i.to_f / 100
@@ -1683,6 +1685,7 @@ else
     all_tc = bot_paths.map { [] }
     all_seed = []
     all_disqualified_for = bot_paths.map { [] }
+    all_response_times = bot_paths.map { [] }
 
     bot_data = []
 
@@ -1711,6 +1714,7 @@ else
             all_ttfc[k] << results[k][:ticks_to_first_capture]
             all_tc[k] << results[k][:tile_coverage]
             all_disqualified_for[k] << results[k][:disqualified_for]
+            all_response_times[k] << results[k][:response_times]
         end
     end
     puts
@@ -1751,6 +1755,7 @@ else
                 :floor_coverage => all_tc[i][k],
                 :ticks_to_first_capture => all_ttfc[i][k],
                 :disqualified_for => all_disqualified_for[i][k],
+                :response_times => all_response_times[i][k],
             }
         end
         all_reports << report
