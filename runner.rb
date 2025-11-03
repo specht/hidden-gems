@@ -1423,7 +1423,7 @@ class Runner
         @bots.each.with_index do |bot, i|
             results[i][:score] = bot[:score]
             results[i][:disqualified_for] = bot[:disqualified_for]
-            if @profile
+            if @profile || @rounds > 1
                 results[i][:gem_utilization] = (ttl_spawned > 0 ? (bot[:score].to_f / ttl_spawned.to_f * 100.0 * 100).to_i.to_f / 100 : 0.0)
                 results[i][:tile_coverage] = ((@tiles_revealed[i] & @floor_tiles_set).size.to_f / @floor_tiles_set.size.to_f * 100.0 * 100).to_i.to_f / 100
             end
