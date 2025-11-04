@@ -692,7 +692,7 @@ class Runner
                     ],
                     [
                         Paint['Tick: ', UI_FOREGROUND_TOP, UI_BACKGROUND_TOP, :bold],
-                        Paint[sprintf("%#{(@max_ticks - 1).to_s.size}d", tick), UI_FOREGROUND_TOP, UI_BACKGROUND_TOP],
+                        Paint[sprintf("%#{(@max_ticks).to_s.size}d", tick), UI_FOREGROUND_TOP, UI_BACKGROUND_TOP],
                     ],
                     [
                         Paint['Score: ', UI_FOREGROUND_TOP, UI_BACKGROUND_TOP, :bold],
@@ -1078,6 +1078,20 @@ class Runner
                         end
                     end
 
+                    if @tick == @max_ticks
+                        if @announcer_enabled
+                            if @bots.size == 1
+                                @chatlog << {emoji: ANNOUNCER_EMOJI, text: "Mission complete after #{@max_ticks} ticks." }
+                            else
+                                if @bots[0][:score] != @bots[1][:score]
+                                    @chatlog << {emoji: ANNOUNCER_EMOJI, text: "Duel ends after #{@max_ticks} ticks (one stands tall, one blames RNG)." }
+                                else
+                                    @chatlog << {emoji: ANNOUNCER_EMOJI, text: "Duel ends in a draw after #{@max_ticks} ticks." }
+                                end
+                            end
+                        end
+                    end
+
                     # STEP 2: RENDER
                     if @verbose >= 2 || @ansi_log_path
                         screen = nil
@@ -1324,33 +1338,35 @@ class Runner
                     end
 
                     # STEP 4: COLLECT GEMS & DECAY GEMS
-                    collected_gems = []
-                    @gems.each.with_index do |gem, i|
-                        collected_this_gem = false
-                        (0...@bots.size).each do |_k|
-                            k = (_k + bot_with_initiative) % @bots.size
-                            bot = @bots[k]
-                            next if bot[:disqualified_for]
-                            if bot[:position] == gem[:position]
-                                collected_this_gem = true
-                                collected_gems << i
-                                bot[:score] += gem[:ttl]
-                                results[k][:ticks_to_first_capture] ||= @tick
-                                if @announcer_enabled
-                                    @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{bot[:name]} scored a gem with #{gem[:ttl]} points!" }
+                    if @tick < @max_ticks
+                        collected_gems = []
+                        @gems.each.with_index do |gem, i|
+                            collected_this_gem = false
+                            (0...@bots.size).each do |_k|
+                                k = (_k + bot_with_initiative) % @bots.size
+                                bot = @bots[k]
+                                next if bot[:disqualified_for]
+                                if bot[:position] == gem[:position]
+                                    collected_this_gem = true
+                                    collected_gems << i
+                                    bot[:score] += gem[:ttl]
+                                    results[k][:ticks_to_first_capture] ||= @tick
+                                    if @announcer_enabled
+                                        @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{bot[:name]} scored a gem with #{gem[:ttl]} points!" }
+                                    end
                                 end
+                                break if collected_this_gem
                             end
-                            break if collected_this_gem
                         end
-                    end
-                    collected_gems.reverse.each do |i|
-                        @gems.delete_at(i)
-                    end
-                    @gems.each.with_index do |gem, i|
-                        gem[:ttl] -= 1
-                    end
-                    @gems.reject! do |gem|
-                        gem[:ttl] <= 0
+                        collected_gems.reverse.each do |i|
+                            @gems.delete_at(i)
+                        end
+                        @gems.each.with_index do |gem, i|
+                            gem[:ttl] -= 1
+                        end
+                        @gems.reject! do |gem|
+                            gem[:ttl] <= 0
+                        end
                     end
 
                     if @gems.size < @max_gems
@@ -1366,7 +1382,7 @@ class Runner
                 end
                 unless paused
                     @tick += 1
-                    break if @tick >= @max_ticks
+                    break if @tick > @max_ticks
                     if @verbose >= 2 && @max_tps > 0
                         loop do
                             tf1 = Time.now.to_f
@@ -1389,7 +1405,7 @@ class Runner
                     #     @tick = @max_ticks - 1
                     #     paused = true
                     elsif key == 'right'
-                        @tick = [@tick + 1, @max_ticks - 1].min
+                        @tick = [@tick + 1, @max_ticks].min
                         paused = true
                     elsif key == ' '
                         paused = !paused
