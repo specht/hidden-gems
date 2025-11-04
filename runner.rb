@@ -1643,7 +1643,10 @@ bot_paths = ARGV.map do |x|
     File.expand_path(x)
 end
 
-bot_paths.reverse! if options[:swap_bots]
+if options[:swap_bots]
+    bot_paths.reverse!
+    options[:docker_workdirs].reverse!
+end
 
 if bot_paths.empty?
     bot_paths << "random-walker"
