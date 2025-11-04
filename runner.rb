@@ -258,9 +258,9 @@ class Runner
                    emit_signals:, signal_radius:, signal_quantization:,
                    signal_noise:, signal_cutoff:, signal_fade:, swap_bots:,
                    cache:, profile:, check_determinism:, use_docker:,
-                   rounds:, round_seeds:, verbose:, max_tps:, announcer_enabled:,
-                   ansi_log_path:, show_timings:, start_paused:,
-                   highlight_color:
+                   docker_workdirs:, rounds:, round_seeds:, verbose:,
+                   max_tps:, announcer_enabled:, ansi_log_path:,
+                   show_timings:, start_paused:, highlight_color:
                    )
         @seed = seed
         @width = width
@@ -282,6 +282,7 @@ class Runner
         @profile = profile
         @check_determinism = check_determinism
         @use_docker = use_docker
+        @docker_workdirs = docker_workdirs
         @rounds = rounds
         @round_seeds = round_seeds
         @verbose = verbose
@@ -482,7 +483,7 @@ class Runner
         end
     end
 
-    def start_bot(_path, &block)
+    def start_bot(_path, workdir, &block)
         path = File.join(File.expand_path(_path), Gem.win_platform? ? 'start.bat' : 'start.sh')
         stdin, stdout, stderr, wait_thr = nil
         $timings.profile("launch bot") do
@@ -508,11 +509,15 @@ class Runner
                     "--tmpfs", "/home/runner/.dotnet:rw,nosuid,nodev,noexec,size=64m",
                     "--tmpfs", "/home/runner/.nuget:rw,nosuid,nodev,noexec,size=64m",
                     "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=64m",
-                    "--tmpfs", "/app:rw,nosuid,nodev,exec,size=256m,uid=1000,gid=1000,mode=1777",
-                    'hidden-gems-runner'
                 ]
-                # STDERR.puts args.join(' ')
-                # exit
+                if workdir
+                    args << '-v'
+                    args << "#{File.expand_path(workdir)}:/app"
+                else
+                    args << "--tmpfs"
+                    args << "/app:rw,nosuid,nodev,exec,size=256m,uid=1000,gid=1000,mode=1777"
+                end
+                args << 'hidden-gems-runner'
                 stdin, stdout, stderr, wait_thr = Open3.popen3(*args)
             else
                 stdin, stdout, stderr, wait_thr = Open3.popen3([path, File.basename(path)], chdir: File.dirname(path))
@@ -849,7 +854,7 @@ class Runner
             end
         end
         bot_index = @bots_io.size
-        @bots_io << start_bot(path) do |line|
+        @bots_io << start_bot(path, @docker_workdirs[bot_index]) do |line|
             @message_queue << {:bot => bot_index, :line => line}
         end
     end
@@ -1424,7 +1429,15 @@ class Runner
         @bots.each.with_index do |bot, i|
             results[i][:score] = bot[:score]
             results[i][:disqualified_for] = bot[:disqualified_for]
-            results[i][:response_times] = bot[:response_times].map { |x| (x * 1e9).to_i } # ms
+            first_response_time = (bot[:response_times].size > 0 ? (bot[:response_times].first * 1e9).to_i : nil)
+            remaining_response_times = bot[:response_times].map { |x| (x * 1e9).to_i }
+            remaining_response_times.shift if remaining_response_times.size > 0
+            results[i][:response_time_stats] = {
+                :first => first_response_time,
+                :min => (remaining_response_times.size > 0 ? remaining_response_times.min : nil),
+                :median => (remaining_response_times.size > 0 ? remaining_response_times.sort[remaining_response_times.size / 2] : nil),
+                :max => (remaining_response_times.size > 0 ? remaining_response_times.max : nil),
+            }
             if @profile
                 results[i][:gem_utilization] = (ttl_spawned > 0 ? (bot[:score].to_f / ttl_spawned.to_f * 100.0 * 100).to_i.to_f / 100 : 0.0)
                 results[i][:tile_coverage] = ((@tiles_revealed[i] & @floor_tiles_set).size.to_f / @floor_tiles_set.size.to_f * 100.0 * 100).to_i.to_f / 100
@@ -1475,6 +1488,7 @@ options = {
     profile: false,
     check_determinism: false,
     use_docker: false,
+    docker_workdirs: [],
     rounds: 1,
     round_seeds: nil,
     announcer_enabled: true,
@@ -1588,6 +1602,9 @@ OptionParser.new do |opts|
     opts.on("-d", "--[no-]use-docker", "Use Docker to run bots (default: #{options[:use_docker]})") do |x|
         options[:use_docker] = x
     end
+    opts.on("--docker-workdirs PATHS", "Specify empty persistent working directories for each bot") do |x|
+        options[:docker_workdirs] = x.split(',').map { |s| s.strip }
+    end
     opts.on("-rN", "--rounds N", Integer, "Rounds (default: #{options[:rounds]})") do |x|
         options[:rounds] = x
     end
@@ -1685,7 +1702,7 @@ else
     all_tc = bot_paths.map { [] }
     all_seed = []
     all_disqualified_for = bot_paths.map { [] }
-    all_response_times = bot_paths.map { [] }
+    all_response_time_stats = bot_paths.map { [] }
 
     bot_data = []
 
@@ -1714,7 +1731,7 @@ else
             all_ttfc[k] << results[k][:ticks_to_first_capture]
             all_tc[k] << results[k][:tile_coverage]
             all_disqualified_for[k] << results[k][:disqualified_for]
-            all_response_times[k] << results[k][:response_times]
+            all_response_time_stats[k] << results[k][:response_time_stats]
         end
     end
     puts
@@ -1755,7 +1772,7 @@ else
                 :floor_coverage => all_tc[i][k],
                 :ticks_to_first_capture => all_ttfc[i][k],
                 :disqualified_for => all_disqualified_for[i][k],
-                :response_times => all_response_times[i][k],
+                :response_time_stats => all_response_time_stats[i][k],
             }
         end
         all_reports << report
