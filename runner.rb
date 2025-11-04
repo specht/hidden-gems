@@ -29,6 +29,7 @@ require 'zlib'
 SOFT_LIMIT            = 0.100
 HARD_LIMIT            = 0.200
 HARD_LIMIT_FIRST_TICK = 20.0
+HARD_LIMIT_FIRST_TICK_CHECK_DETERMINISM = 60.0
 OVERTIME_BUDGET       = 1.5
 
 ANSI = /\e\[[0-9;:<>?]*[@-~]/
@@ -1179,7 +1180,7 @@ class Runner
                     # 3b) WRITE PHASE: send to all eligible bots first
                     start_mono   = {}
                     deadline_mono = {}
-                    write_limit = (@tick == 0 ? HARD_LIMIT_FIRST_TICK : HARD_LIMIT)
+                    write_limit = (@tick == 0 ? (@check_determinism ? HARD_LIMIT_FIRST_TICK_CHECK_DETERMINISM : HARD_LIMIT_FIRST_TICK) : HARD_LIMIT)
                     (0...@bots.size).each do |_k|
                         i = (_k + bot_with_initiative) % @bots.size
                         next if @bots[i][:disqualified_for] || prepared[i].nil?
@@ -1282,7 +1283,7 @@ class Runner
 
                         elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - start_mono[i]
                         @bots[i][:response_times] << elapsed
-                        overtime = (@tick == 0) ? 0.0 : (elapsed - SOFT_LIMIT)
+                        overtime = (@tick == 0 || @check_determinism) ? 0.0 : (elapsed - SOFT_LIMIT)
                         @bots[i][:overtime_used] += overtime if overtime > 0.0
                         if @announcer_enabled && overtime.to_f > 0.0
                             @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} exceeded soft limit by #{(overtime * 1e3).to_i} ms (total overtime: #{(@bots[i][:overtime_used] * 1e3).to_i} ms)" }
