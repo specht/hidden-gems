@@ -844,7 +844,7 @@ class Runner
     end
 
     def add_bot(path)
-        @bots << {:position => @spawn_points.shift, :score => 0, :name => "Botty McBotface", :emoji => '🤖', :overtime_used => 0.0, :disqualified_for => nil, :response_times => []}
+        @bots << {:position => @spawn_points.shift, :score => 0, :name => "Botty McBotface", :emoji => '🤖', :overtime_used => 0.0, :disqualified_for => nil, :response_times => [], :stderr_log => []}
         yaml_path = File.join(File.expand_path(path), 'bot.yaml')
         if File.exist?(yaml_path)
             info = YAML.load(File.read(yaml_path))
@@ -857,6 +857,7 @@ class Runner
         bot_index = @bots_io.size
         @bots_io << start_bot(path, @docker_workdirs[bot_index]) do |line|
             @message_queue << {:bot => bot_index, :line => line}
+            @bots[bot_index][:stderr_log] << line
         end
     end
 
@@ -1455,6 +1456,7 @@ class Runner
                 :median => (remaining_response_times.size > 0 ? remaining_response_times.sort[remaining_response_times.size / 2] : nil),
                 :max => (remaining_response_times.size > 0 ? remaining_response_times.max : nil),
             }
+            results[i][:stderr_log] = bot[:stderr_log]
             if @profile
                 results[i][:gem_utilization] = (ttl_spawned > 0 ? (bot[:score].to_f / ttl_spawned.to_f * 100.0 * 100).to_i.to_f / 100 : 0.0)
                 results[i][:tile_coverage] = ((@tiles_revealed[i] & @floor_tiles_set).size.to_f / @floor_tiles_set.size.to_f * 100.0 * 100).to_i.to_f / 100
@@ -1723,6 +1725,7 @@ else
     all_seed = []
     all_disqualified_for = bot_paths.map { [] }
     all_response_time_stats = bot_paths.map { [] }
+    all_stderr_logs = bot_paths.map { [] }
 
     bot_data = []
 
@@ -1752,6 +1755,7 @@ else
             all_tc[k] << results[k][:tile_coverage]
             all_disqualified_for[k] << results[k][:disqualified_for]
             all_response_time_stats[k] << results[k][:response_time_stats]
+            all_stderr_logs[k] << results[k][:stderr_log]
         end
     end
     puts
@@ -1785,7 +1789,7 @@ else
         report[:gem_utilization_cv] = cv.nan? ? nil : cv
         report[:floor_coverage_mean] = mean(all_tc[i])
         report[:rounds] = all_score[i].map.with_index do |_, k|
-            {
+            d = {
                 :seed => all_seed[k].to_s(36),
                 :score => all_score[i][k],
                 :gem_utilization => all_utilization[i][k],
@@ -1794,6 +1798,10 @@ else
                 :disqualified_for => all_disqualified_for[i][k],
                 :response_time_stats => all_response_time_stats[i][k],
             }
+            if d[:disqualified_for]
+                d[:stderr_log] = all_stderr_logs[i][k]
+            end
+            d
         end
         all_reports << report
     end
