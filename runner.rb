@@ -1627,6 +1627,7 @@ OptionParser.new do |opts|
     opts.on("-rN", "--rounds N", Integer, "Rounds (default: #{options[:rounds]})") do |x|
         options[:rounds] = x
         options[:profile] = true
+        options[:verbose] = 0
     end
     opts.on("--round-seeds SEEDS", String, "Round seeds (comma separated)") do |x|
         options[:round_seeds] = x.split(',').map { |s| s.strip }
