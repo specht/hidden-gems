@@ -60,7 +60,7 @@ RUN set -eux; \
 RUN apt-get update && apt-get install -y wget gnupg ca-certificates \
  && apt-get update \
  # install .NET 9 runtime (STS). Use 8.0 for LTS.
- && apt-get install -y dotnet-runtime-9.0 dotnet-sdk-9.0 \
+ && apt-get install -y dotnet-runtime-9.0 dotnet-sdk-9.0 unzip \
  && rm -rf /var/lib/apt/lists/*
 
 RUN sed -i 's/# \(en_US.UTF-8 UTF-8\)/\1/' /etc/locale.gen \
@@ -80,6 +80,9 @@ USER runner
 
 RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
 RUN mkdir -p /home/runner/.cargo && echo "[source.crates-io]\nreplace-with = \"vendored-sources\"\n\n[source.vendored-sources]\ndirectory = \"vendor\"" >> /home/runner/.cargo/config.toml
+
+# Install Bun
+RUN curl -fsSL https://bun.com/install | bash
 
 ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
 
