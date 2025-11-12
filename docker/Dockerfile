@@ -19,9 +19,19 @@ RUN apt-get update \
       default-jdk \
       lua5.4 \
       libc6 libstdc++6 libgcc-s1 zlib1g libssl3 \
-      rsync wget golang nodejs php \
+      rsync wget nodejs php \
       fpc fp-units-fcl libjansson-dev \
  && rm -rf /var/lib/apt/lists/*
+
+ARG GO_VERSION=1.25.4
+ENV GOTOOLCHAIN=local PATH="/usr/local/go/bin:${PATH}"
+
+RUN set -eux; \
+    curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go.tgz; \
+    echo "9fa5ffeda4170de60f67f3aa0f824e426421ba724c21e133c1e35d6159ca1bec  /tmp/go.tgz" | sha256sum -c -; \
+    rm -rf /usr/local/go; \
+    tar -C /usr/local -xzf /tmp/go.tgz; \
+    rm /tmp/go.tgz
 
 # Install PowerShell
 RUN apt-get update && apt-get install -y wget apt-transport-https software-properties-common gnupg \
