@@ -13,7 +13,7 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates curl git tini tzdata locales \
       build-essential make pkg-config \
-      python3 python3-venv python3-pip \
+      python3 python3-venv python3-pip python3-numpy \
       ruby-full bundler \
       nodejs npm \
       default-jdk \
