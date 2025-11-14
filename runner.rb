@@ -721,6 +721,30 @@ class Runner
             @bg_fade ||= {}
             @bg_highlight ||= {}
 
+            bot_highlights = {}
+
+            @bots.each.with_index do |x, i|
+                debug_json = ((@protocol[i][-2] || {})[:bots] || {})[:debug_json]
+                if debug_json
+                    data = nil
+                    begin
+                        data = JSON.parse(debug_json)
+                    rescue
+                        next
+                    end
+                    if data['highlight']
+                        data['highlight'].each do |_|
+                            x = _[0]
+                            y = _[1]
+                            offset = (y << 16) | x
+                            color = _[2]
+                            bot_highlights[offset] ||= []
+                            bot_highlights[offset] << color
+                        end
+                    end
+                end
+            end
+
             $timings.profile("render: main screen") do
                 (0...@height).each do |y|
                     (0...@width).each do |x|
@@ -793,6 +817,13 @@ class Runner
                         cache_key_2 = "#{@fog_of_war_cache[cache_key_0]}/#{@fog_of_war_cache[cache_key_1]}/#{(@bg_fade[offset] * 64).round}"
                         @fog_of_war_cache[cache_key_2] ||= mix_rgb_hex(@fog_of_war_cache[cache_key_0], @fog_of_war_cache[cache_key_1], @bg_fade[offset])
                         bg = @fog_of_war_cache[cache_key_2]
+                        if bot_highlights.include?(offset)
+                            bot_highlights[offset].each do |color|
+                                cache_key_3 = "#{bg}/#{color}/32"
+                                @fog_of_war_cache[cache_key_3] ||= mix_rgb_hex(bg, color, 0.5)
+                                bg = @fog_of_war_cache[cache_key_3]
+                            end
+                        end
                         io.print Paint[c, nil, bg]
                     end
                     if @enable_chatlog && @chatlog_position == :right
@@ -1310,8 +1341,10 @@ class Runner
                             end
                         end
 
-                        @protocol[i].last[:bots][:response] = line
-                        command = line.split(' ').first
+                        command = line.split(' ').first.strip
+                        debug_json = line[command.length..-1]&.strip
+                        @protocol[i].last[:bots][:response] = command
+                        @protocol[i].last[:bots][:debug_json] = debug_json
 
                         bot_position = @bots[i][:position]
                         if ['N','E','S','W'].include?(command)
