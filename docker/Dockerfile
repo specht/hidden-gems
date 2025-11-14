@@ -13,7 +13,7 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates curl git tini tzdata locales \
       build-essential make pkg-config \
-      python3 python3-venv python3-pip python3-numpy \
+      python3 python3-venv python3-pip \
       ruby-full bundler \
       nodejs npm \
       default-jdk \
@@ -95,6 +95,8 @@ RUN mkdir -p /home/runner/.cargo && echo "[source.crates-io]\nreplace-with = \"v
 RUN curl -fsSL https://bun.com/install | bash
 
 ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
+
+RUN python3 -m pip install --user --break-system-packages numpy
 
 ENTRYPOINT ["/usr/bin/tini","--"]
 CMD ["/launch.sh"]
