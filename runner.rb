@@ -1501,12 +1501,16 @@ class Runner
         if @ansi_log_path
             path = @ansi_log_path.sub('.json.gz', "-#{@seed.to_s(36)}.json.gz")
             Zlib::GzipWriter.open(path) do |f|
-                data = {:width => @terminal_width, :height => @terminal_height, :frames => @ansi_log}
+                emoji_widths = {}
+                @bots.each do |bot|
+                    emoji_widths[bot[:emoji]] = vwidth(bot[:emoji])
+                end
+                data = {:width => @terminal_width, :height => @terminal_height, :frames => @ansi_log, :emoji_widths => emoji_widths}
                 f.write(data.to_json)
             end
             path = @ansi_log_path.sub('.json.gz', "-#{@seed.to_s(36)}-poster.json.gz")
             Zlib::GzipWriter.open(path) do |f|
-                data = {:width => @terminal_width, :height => @terminal_height, :frames => [@ansi_log.first]}
+                data = {:width => @terminal_width, :height => @terminal_height, :frames => [@ansi_log.first], :emoji_widths => emoji_widths}
                 f.write(data.to_json)
             end
         end
