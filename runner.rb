@@ -261,7 +261,8 @@ class Runner
                    cache:, profile:, check_determinism:, use_docker:,
                    docker_workdirs:, rounds:, round_seeds:, verbose:,
                    max_tps:, announcer_enabled:, ansi_log_path:,
-                   show_timings:, start_paused:, highlight_color:
+                   show_timings:, start_paused:, highlight_color:,
+                   enable_debug:
                    )
         @seed = seed
         @width = width
@@ -300,6 +301,7 @@ class Runner
         @show_timings = show_timings
         @start_paused = start_paused
         @highlight_color = highlight_color
+        @enable_debug = enable_debug
         @faded_highlight_color = mix_rgb_hex(@highlight_color, '#000000', 0.25)
         @demo_mode = @ansi_log_path && File.basename(@ansi_log_path).include?('demo')
 
@@ -723,23 +725,25 @@ class Runner
 
             bot_highlights = {}
 
-            @bots.each.with_index do |x, i|
-                debug_json = ((@protocol[i][-2] || {})[:bots] || {})[:debug_json]
-                if debug_json
-                    data = nil
-                    begin
-                        data = JSON.parse(debug_json)
-                    rescue
-                        next
-                    end
-                    if data['highlight']
-                        data['highlight'].each do |_|
-                            x = _[0]
-                            y = _[1]
-                            offset = (y << 16) | x
-                            color = _[2]
-                            bot_highlights[offset] ||= []
-                            bot_highlights[offset] << color
+            if @enable_debug
+                @bots.each.with_index do |x, i|
+                    debug_json = ((@protocol[i][-2] || {})[:bots] || {})[:debug_json]
+                    if debug_json
+                        data = nil
+                        begin
+                            data = JSON.parse(debug_json)
+                        rescue
+                            next
+                        end
+                        if data['highlight']
+                            data['highlight'].each do |_|
+                                x = _[0]
+                                y = _[1]
+                                offset = (y << 16) | x
+                                color = _[2]
+                                bot_highlights[offset] ||= []
+                                bot_highlights[offset] << color
+                            end
                         end
                     end
                 end
@@ -1552,6 +1556,7 @@ options = {
     show_timings: false,
     start_paused: false,
     highlight_color: '#ffffff',
+    enable_debug: true,
 }
 
 unless ARGV.include?('--stage')
@@ -1694,6 +1699,9 @@ OptionParser.new do |opts|
             raise OptionParser::InvalidArgument, "Invalid highlight color '#{x}': expected HTML RGB format like #RRGGBB"
         end
         options[:highlight_color] = x.downcase
+    end
+    opts.on("--[no-]enable-debug", "Enable debugging commands from bot (default: #{options[:enable_debug]})") do |x|
+        options[:enable_debug] = x
     end
 end.parse!
 
