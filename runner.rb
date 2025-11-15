@@ -1761,7 +1761,56 @@ if options[:rounds] == 1
     runner.stage_key = stage_key if stage_key
     runner.setup
     bot_paths.each { |path| runner.add_bot(path) }
-    runner.run
+    results = runner.run
+
+    if write_profile_json_path
+        all_reports = []
+
+        runner.bots.each_with_index do |bot, i|
+            score = results[i][:score]
+            gu    = results[i][:gem_utilization]
+            tc    = results[i][:tile_coverage]
+            ttfc  = results[i][:ticks_to_first_capture]
+            disq  = results[i][:disqualified_for]
+            rts   = results[i][:response_time_stats]
+            stderr_log = results[i][:stderr_log]
+
+            report = {}
+            report[:timestamp] = Time.now.to_i
+            report[:stage_key] = stage_key
+            report[:stage_title] = stage_title
+            report[:git_hash] = `git describe --always --dirty`.strip
+            report[:seed] = og_seed.to_s(36)
+            report[:name] = bot[:name]
+            report[:emoji] = bot[:emoji]
+            report[:total_score] = score
+
+            # For single round, mean values = the round value; CV is not meaningful → nil
+            report[:gem_utilization_mean] = gu if gu
+            report[:gem_utilization_cv]   = nil
+            report[:floor_coverage_mean]  = tc if tc
+
+            round_entry = {
+                :seed => options[:seed].to_s(36),
+                :score => score,
+                :gem_utilization => gu,
+                :floor_coverage => tc,
+                :ticks_to_first_capture => ttfc,
+                :disqualified_for => disq,
+                :response_time_stats => rts,
+            }
+            if disq
+                round_entry[:stderr_log] = stderr_log
+            end
+
+            report[:rounds] = [round_entry]
+            all_reports << report
+        end
+
+        File.open(write_profile_json_path, 'w') do |f|
+            f.write(all_reports.to_json)
+        end
+    end
 else
     round_seed = Digest::SHA256.digest("#{options[:seed]}/rounds").unpack1('L<')
     seed_rng = PCG32.new(round_seed)
