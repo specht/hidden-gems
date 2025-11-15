@@ -86,6 +86,7 @@ RUN groupadd -g ${GROUP_ID} runner && useradd -m -u ${USER_ID} -g ${GROUP_ID} -s
 WORKDIR /app
 RUN chown -R runner:runner /app
 RUN chown -R runner:runner /usr/local/julia
+RUN python3 -m pip install --break-system-packages numpy
 USER runner
 
 RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
@@ -95,8 +96,6 @@ RUN mkdir -p /home/runner/.cargo && echo "[source.crates-io]\nreplace-with = \"v
 RUN curl -fsSL https://bun.com/install | bash
 
 ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
-
-RUN python3 -m pip install --user --break-system-packages numpy
 
 ENTRYPOINT ["/usr/bin/tini","--"]
 CMD ["/launch.sh"]
