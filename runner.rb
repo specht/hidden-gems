@@ -1500,11 +1500,11 @@ class Runner
         end
         if @ansi_log_path
             path = @ansi_log_path.sub('.json.gz', "-#{@seed.to_s(36)}.json.gz")
+            emoji_widths = {}
+            @bots.each do |bot|
+                emoji_widths[bot[:emoji]] = vwidth(bot[:emoji])
+            end
             Zlib::GzipWriter.open(path) do |f|
-                emoji_widths = {}
-                @bots.each do |bot|
-                    emoji_widths[bot[:emoji]] = vwidth(bot[:emoji])
-                end
                 data = {:width => @terminal_width, :height => @terminal_height, :frames => @ansi_log, :emoji_widths => emoji_widths}
                 f.write(data.to_json)
             end
