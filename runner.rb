@@ -679,7 +679,7 @@ class Runner
         StringIO.open do |io|
             io.print "\033[H" if @verbose >= 2
 
-            score_s = @bots.map { |x| "#{x[:emoji]} #{x[:score]}" }.join(' : ')
+            score_s = @bots.map { |x| "#{x[:emoji]} #{x[:disqualified_for] ? 0 : x[:score]}" }.join(' : ')
 
             $timings.profile("render: upper status bar") do
                 status_line = [
