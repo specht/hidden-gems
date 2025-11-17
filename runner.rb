@@ -1164,6 +1164,7 @@ class Runner
 
                     # --- STEP 3: QUERY BOTS in parallel: send data to all, then read one line from each ---
 
+                    next if @tick == @max_ticks
                     @stdout_buffers ||= Array.new(@bots.size) { "" }
 
                     bot_with_initiative = @tick % @bots.size
