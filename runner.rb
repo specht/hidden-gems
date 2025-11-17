@@ -394,24 +394,24 @@ class Runner
             else
                 # pre-calculate visibility from each tile
                 @visibility = {}
-                if @generator == 'arena'
-                    inner_field_visibility = nil
-                    (0...@height).each do |y|
-                        (0...@width).each do |x|
-                            offset = (y << 16) | x
-                            v = Set.new()
-                            unless @maze.include?(offset)
-                                if inner_field_visibility.nil?
-                                    visible = FOVAngle.visible(@width, @height, @maze, x, y, radius: @vis_radius) { |xx, yy| @maze.include?((yy << 16) | xx) }
-                                    v = visible.to_a.map { |p| (p[1] << 16) | p[0] }.sort
-                                    inner_field_visibility = v
-                                end
-                                v = inner_field_visibility
-                            end
-                            @visibility[offset] = Set.new(v)
-                        end
-                    end
-                else
+                # if @generator == 'arena'
+                #     inner_field_visibility = nil
+                #     (0...@height).each do |y|
+                #         (0...@width).each do |x|
+                #             offset = (y << 16) | x
+                #             v = Set.new()
+                #             unless @maze.include?(offset)
+                #                 if inner_field_visibility.nil?
+                #                     visible = FOVAngle.visible(@width, @height, @maze, x, y, radius: @vis_radius) { |xx, yy| @maze.include?((yy << 16) | xx) }
+                #                     v = visible.to_a.map { |p| (p[1] << 16) | p[0] }.sort
+                #                     inner_field_visibility = v
+                #                 end
+                #                 v = inner_field_visibility
+                #             end
+                #             @visibility[offset] = Set.new(v)
+                #         end
+                #     end
+                # else
                     (0...@height).each do |y|
                         (0...@width).each do |x|
                             offset = (y << 16) | x
@@ -423,7 +423,7 @@ class Runner
                             @visibility[offset] = Set.new(v)
                         end
                     end
-                end
+                # end
 
                 if @cache
                     bytes = Marshal.dump(@visibility)
