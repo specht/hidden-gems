@@ -18,7 +18,7 @@ stage-0@0.2:
     vis_radius: 100
     gem_spawn_rate: 0.04..0.06
 stage-1@0.1:
-    title: Traning Grounds
+    title: Training Grounds
     from: '2025-11-17'
     width: 29
     height: 19
