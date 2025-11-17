@@ -1181,7 +1181,7 @@ class Runner
                                 data[:config] = {}
                                 %w(stage_key width height generator max_ticks emit_signals vis_radius max_gems
                                     gem_spawn_rate gem_ttl signal_radius signal_cutoff signal_noise
-                                    signal_quantization signal_fade).each do |key|
+                                    signal_quantization signal_fade enable_debug).each do |key|
                                     data[:config][key.to_sym] = instance_variable_get("@#{key}")
                                 end
                                 bot_seed = Digest::SHA256.digest("#{@seed}/bot").unpack1('L<')
