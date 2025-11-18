@@ -86,7 +86,17 @@ RUN groupadd -g ${GROUP_ID} runner && useradd -m -u ${USER_ID} -g ${GROUP_ID} -s
 WORKDIR /app
 RUN chown -R runner:runner /app
 RUN chown -R runner:runner /usr/local/julia
-RUN python3 -m pip install --break-system-packages numpy
+RUN python3 -m pip install --break-system-packages numpy networkx
+
+# Install zig 0.15.2
+ARG ZIG_VERSION=0.15.2
+
+RUN curl -LO https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz && \
+    tar -xf zig-x86_64-linux-${ZIG_VERSION}.tar.xz && \
+    mv zig-x86_64-linux-${ZIG_VERSION} /opt/zig && \
+    ln -s /opt/zig/zig /usr/local/bin/zig && \
+    rm zig-x86_64-linux-${ZIG_VERSION}.tar.xz
+
 USER runner
 
 RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
