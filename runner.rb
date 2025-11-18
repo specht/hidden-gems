@@ -1351,7 +1351,7 @@ class Runner
                             end
                         end
 
-                        command = line.split(' ').first.strip
+                        command = (line.split(' ').first || '').strip
                         debug_json = line[command.length..-1]&.strip
                         @protocol[i].last[:bots][:response] = command
                         @protocol[i].last[:bots][:debug_json] = debug_json
