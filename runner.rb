@@ -523,7 +523,13 @@ class Runner
                 args << 'hidden-gems-runner'
                 stdin, stdout, stderr, wait_thr = Open3.popen3(*args)
             else
-                stdin, stdout, stderr, wait_thr = Open3.popen3([path, File.basename(path)], chdir: File.dirname(path))
+                spawn_opts = { chdir: File.dirname(path) }
+                if Gem.win_platform?
+                    spawn_opts[:new_pgroup] = true   # Windows
+                else
+                    spawn_opts[:pgroup] = true       # Linux/macOS
+                end
+                stdin, stdout, stderr, wait_thr = Open3.popen3([path, File.basename(path)], spawn_opts)
             end
         end
         stdin.sync = true
@@ -538,6 +544,22 @@ class Runner
             end
         end
         Bot.new(stdin, stdout, stderr, wait_thr)
+    end
+
+    def kill_bot_process(bot_io)
+        pid = bot_io.wait_thr.pid
+        if Gem.win_platform?
+            system("taskkill /PID #{pid} /T /F >NUL 2>&1")
+        else
+            begin
+                if @use_docker
+                    Process.kill('TERM', pid)
+                else
+                    Process.kill('TERM', -pid)
+                end
+            rescue Errno::ESRCH
+            end
+        end
     end
 
     def mix_rgb_hex(c1, c2, t)
@@ -1019,11 +1041,10 @@ class Runner
     def run
         trap("INT") do
             @bots_io.each { |b| b.stdin.close rescue nil }
-            @bots_io.each do |b|
-                b.wait_thr.join(0.2) or Process.kill(Gem.win_platform? ? "KILL" : "TERM", b.wait_thr.pid) rescue nil
-            end
+            @bots_io.each { |b| kill_bot_process(b) }
             exit
         end
+
         print "\033[2J" if @verbose >= 2
         @tick = 0
         @tps = 0
@@ -1458,10 +1479,7 @@ class Runner
                 end
             end
             @bots_io.each do |b|
-                begin
-                    Process.kill(Gem.win_platform? ? "KILL" : "TERM", b.wait_thr.pid)
-                rescue Errno::ESRCH
-                end
+                kill_bot_process(b)
             end
         ensure
             print "\033[?25h" if @verbose >= 2
