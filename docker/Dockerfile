@@ -104,6 +104,7 @@ RUN mkdir -p /home/runner/.cargo && echo "[source.crates-io]\nreplace-with = \"v
 
 # Install Bun
 RUN curl -fsSL https://bun.com/install | bash
+ENV PATH="/home/runner/.bun/bin:$PATH"
 
 ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
 
