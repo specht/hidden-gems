@@ -1375,7 +1375,9 @@ class Runner
                         command = (line.split(' ').first || '').strip
                         debug_json = line[command.length..-1]&.strip
                         @protocol[i].last[:bots][:response] = command
-                        @protocol[i].last[:bots][:debug_json] = debug_json
+                        unless @check_determinism
+                            @protocol[i].last[:bots][:debug_json] = debug_json
+                        end
 
                         bot_position = @bots[i][:position]
                         if ['N','E','S','W'].include?(command)
