@@ -1366,7 +1366,7 @@ class Runner
                         if @announcer_enabled && overtime.to_f > 0.0
                             @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} exceeded soft limit by #{(overtime * 1e3).to_i} ms (total overtime: #{(@bots[i][:overtime_used] * 1e3).to_i} ms)" }
                         end
-                        if @bots[i][:overtime_used] > OVERTIME_BUDGET
+                        if @bots[i][:overtime_used] > OVERTIME_BUDGET * @timeout_scale
                             if @bots[i][:disqualified_for].nil?
                                 @bots[i][:disqualified_for] = 'overtime_budget_exceeded'
                                 @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} has exceeded their overtime budget and is disqualified!" } if @announcer_enabled
