@@ -262,7 +262,7 @@ class Runner
                    docker_workdirs:, rounds:, round_seeds:, verbose:,
                    max_tps:, announcer_enabled:, ansi_log_path:,
                    show_timings:, start_paused:, highlight_color:,
-                   enable_debug:
+                   enable_debug:, timeout_scale:
                    )
         @seed = seed
         @width = width
@@ -302,6 +302,7 @@ class Runner
         @start_paused = start_paused
         @highlight_color = highlight_color
         @enable_debug = enable_debug
+        @timeout_scale = timeout_scale
         @faded_highlight_color = mix_rgb_hex(@highlight_color, '#000000', 0.25)
         @demo_mode = @ansi_log_path && File.basename(@ansi_log_path).include?('demo')
 
@@ -1202,7 +1203,7 @@ class Runner
                                 data[:config] = {}
                                 %w(stage_key width height generator max_ticks emit_signals vis_radius max_gems
                                     gem_spawn_rate gem_ttl signal_radius signal_cutoff signal_noise
-                                    signal_quantization signal_fade enable_debug).each do |key|
+                                    signal_quantization signal_fade enable_debug timeout_scale).each do |key|
                                     data[:config][key.to_sym] = instance_variable_get("@#{key}")
                                 end
                                 bot_seed = Digest::SHA256.digest("#{@seed}/bot").unpack1('L<')
@@ -1257,7 +1258,7 @@ class Runner
                     # 3b) WRITE PHASE: send to all eligible bots first
                     start_mono   = {}
                     deadline_mono = {}
-                    write_limit = (@tick == 0 ? (@check_determinism ? HARD_LIMIT_FIRST_TICK_CHECK_DETERMINISM : HARD_LIMIT_FIRST_TICK) : HARD_LIMIT)
+                    write_limit = (@tick == 0 ? (@check_determinism ? HARD_LIMIT_FIRST_TICK_CHECK_DETERMINISM : HARD_LIMIT_FIRST_TICK) : HARD_LIMIT * @timeout_scale)
                     (0...@bots.size).each do |_k|
                         i = (_k + bot_with_initiative) % @bots.size
                         next if @bots[i][:disqualified_for] || prepared[i].nil?
@@ -1360,7 +1361,7 @@ class Runner
 
                         elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - start_mono[i]
                         @bots[i][:response_times] << elapsed
-                        overtime = (@tick == 0 || @check_determinism) ? 0.0 : (elapsed - SOFT_LIMIT)
+                        overtime = (@tick == 0 || @check_determinism) ? 0.0 : (elapsed - SOFT_LIMIT * @timeout_scale)
                         @bots[i][:overtime_used] += overtime if overtime > 0.0
                         if @announcer_enabled && overtime.to_f > 0.0
                             @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} exceeded soft limit by #{(overtime * 1e3).to_i} ms (total overtime: #{(@bots[i][:overtime_used] * 1e3).to_i} ms)" }
@@ -1583,6 +1584,7 @@ options = {
     start_paused: false,
     highlight_color: '#ffffff',
     enable_debug: true,
+    timeout_scale: 1.0,
 }
 
 unless ARGV.include?('--stage')
@@ -1728,6 +1730,10 @@ OptionParser.new do |opts|
     end
     opts.on("--[no-]enable-debug", "Enable debugging commands from bot (default: #{options[:enable_debug]})") do |x|
         options[:enable_debug] = x
+    end
+    opts.on("--timeout-scale N", Float, "Timeout scale (default: #{options[:timeout_scale]}), 0 to disable timeouts") do |x|
+        x = 3600 * 24 if x <= 1e-6
+        options[:timeout_scale] = x
     end
 end.parse!
 
