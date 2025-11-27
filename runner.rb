@@ -29,7 +29,6 @@ require 'zlib'
 SOFT_LIMIT            = 0.100
 HARD_LIMIT            = 0.200
 HARD_LIMIT_FIRST_TICK = 20.0
-HARD_LIMIT_FIRST_TICK_CHECK_DETERMINISM = 60.0
 OVERTIME_BUDGET       = 1.5
 
 ANSI = /\e\[[0-9;:<>?]*[@-~]/
@@ -1258,7 +1257,7 @@ class Runner
                     # 3b) WRITE PHASE: send to all eligible bots first
                     start_mono   = {}
                     deadline_mono = {}
-                    write_limit = (@tick == 0 ? (@check_determinism ? HARD_LIMIT_FIRST_TICK_CHECK_DETERMINISM : HARD_LIMIT_FIRST_TICK) : HARD_LIMIT * @timeout_scale)
+                    write_limit = (@tick == 0 ? HARD_LIMIT_FIRST_TICK : HARD_LIMIT) * @timeout_scale
                     (0...@bots.size).each do |_k|
                         i = (_k + bot_with_initiative) % @bots.size
                         next if @bots[i][:disqualified_for] || prepared[i].nil?
@@ -1756,6 +1755,8 @@ if bot_paths.size > 2
 end
 
 if options[:check_determinism]
+    # give more time for bot startup and responses during determinism check
+    @timeout_scale = 5.0
     round_seed = Digest::SHA256.digest("#{options[:seed]}/check-determinism").unpack1('L<')
     seed_rng = PCG32.new(round_seed)
     seed = seed_rng.randrange(2 ** 32)
