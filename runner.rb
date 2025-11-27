@@ -1764,7 +1764,7 @@ if options[:check_determinism]
     bot_paths.each do |path|
         STDERR.puts "Checking determinism of bot at #{path}..."
         checksum = nil
-        2.times
+        2.times do
             options[:seed] = seed
             runner = Runner.new(**options)
             runner.stage_title = stage_title if stage_title
