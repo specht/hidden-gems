@@ -1763,7 +1763,10 @@ if options[:check_determinism]
     bot_paths.each do |path|
         STDERR.puts "Checking determinism of bot at #{path}..."
         checksum = nil
-        2.times do
+        # Run determinism check 3 times:
+        # 1. Compile etc.
+        # 2. Run twice (warm) and compare checksums
+        3.times do |i|
             options[:seed] = seed
             runner = Runner.new(**options)
             runner.stage_title = stage_title if stage_title
@@ -1771,12 +1774,14 @@ if options[:check_determinism]
             runner.setup
             runner.add_bot(path)
             results = runner.run
-            if checksum.nil?
-                checksum = results[0][:protocol_checksum]
-            else
-                if checksum != results[0][:protocol_checksum]
-                    STDERR.puts "❌ Non-deterministic behaviour detected for bot at #{path}"
-                    exit(1)
+            if i > 0
+                if checksum.nil?
+                    checksum = results[0][:protocol_checksum]
+                else
+                    if checksum != results[0][:protocol_checksum]
+                        STDERR.puts "❌ Non-deterministic behaviour detected for bot at #{path}"
+                        exit(1)
+                    end
                 end
             end
         end
