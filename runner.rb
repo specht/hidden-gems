@@ -250,7 +250,7 @@ class Runner
 
     Bot = Struct.new(:stdin, :stdout, :stderr, :wait_thr)
 
-    attr_accessor :round, :stage_title, :stage_key
+    attr_accessor :round, :stage_title, :stage_key, :timeout_scale
     attr_reader :bots, :rng
 
     def initialize(seed:, width:, height:, generator:, max_ticks:,
@@ -1755,8 +1755,6 @@ if bot_paths.size > 2
 end
 
 if options[:check_determinism]
-    # give more time for bot startup and responses during determinism check
-    @timeout_scale = 5.0
     round_seed = Digest::SHA256.digest("#{options[:seed]}/check-determinism").unpack1('L<')
     seed_rng = PCG32.new(round_seed)
     seed = seed_rng.randrange(2 ** 32)
@@ -1769,6 +1767,8 @@ if options[:check_determinism]
             runner = Runner.new(**options)
             runner.stage_title = stage_title if stage_title
             runner.stage_key = stage_key if stage_key
+            # allow for more time for bot startup and responses during determinism check
+            runner.timeout_scale = 10.0
             runner.setup
             runner.add_bot(path)
             results = runner.run
