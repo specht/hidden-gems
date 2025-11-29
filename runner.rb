@@ -257,7 +257,7 @@ class Runner
                    vis_radius:, gem_spawn_rate:, gem_ttl:, max_gems:,
                    emit_signals:, signal_radius:, signal_quantization:,
                    signal_noise:, signal_cutoff:, signal_fade:, swap_bots:,
-                   cache:, profile:, check_determinism:, use_docker:,
+                   cache:, profile:, check_determinism:, check_determinism_loop:, use_docker:,
                    docker_workdirs:, rounds:, round_seeds:, verbose:,
                    max_tps:, announcer_enabled:, ansi_log_path:,
                    show_timings:, start_paused:, highlight_color:,
@@ -282,6 +282,7 @@ class Runner
         @cache = cache
         @profile = profile
         @check_determinism = check_determinism
+		@check_determinism_loop = check_determinism_loop
         @use_docker = use_docker
         @docker_workdirs = docker_workdirs
         @rounds = rounds
@@ -307,7 +308,7 @@ class Runner
 
         param_rng = PCG32.new(@seed)
         [:width, :height, :max_ticks, :vis_radius, :gem_ttl, :max_gems,
-         :signal_radius, :rounds].each do |_key|
+         :signal_radius, :rounds, :check_determinism_loop].each do |_key|
             key = "@#{_key}".to_sym
             value = instance_variable_get(key)
             if value.is_a?(String) && value.include?('..')
@@ -1573,6 +1574,7 @@ options = {
     emit_signals: false,
     profile: false,
     check_determinism: false,
+	check_determinism_loop: 2,
     use_docker: false,
     docker_workdirs: [],
     rounds: 1,
@@ -1687,6 +1689,9 @@ OptionParser.new do |opts|
     opts.on("--[no-]check-determinism", "Check for deterministic behaviour and exit (default: #{options[:check_determinism]})") do |x|
         options[:check_determinism] = x
     end
+	opts.on("--check-determinism-loop NR", Integer, "Number of loops used to check determinism (default: #{options[:check_determinism_loop]}). Only has an effect, if check-determinism is used.") do |x|
+        options[:check_determinism_loop] = x
+    end
     opts.on("-d", "--[no-]use-docker", "Use Docker to run bots (default: #{options[:use_docker]})") do |x|
         options[:use_docker] = x
     end
@@ -1758,11 +1763,17 @@ if options[:check_determinism]
     round_seed = Digest::SHA256.digest("#{options[:seed]}/check-determinism").unpack1('L<')
     seed_rng = PCG32.new(round_seed)
     seed = seed_rng.randrange(2 ** 32)
+	i = options[:check_determinism_loop]
+	# check, if we loop min twice
+	if i < 2
+		STDERR.puts "❌ Parameter check_determinism_loop has to be >=2."
+		exit(1)
+	end	
     options[:verbose] = 0
     bot_paths.each do |path|
-        STDERR.puts "Checking determinism of bot at #{path}..."
+        STDERR.puts "Checking determinism of bot at #{path} #{i} times..."
         checksum = nil
-        2.times do
+        i.times do
             options[:seed] = seed
             runner = Runner.new(**options)
             runner.stage_title = stage_title if stage_title
@@ -1771,15 +1782,14 @@ if options[:check_determinism]
             runner.timeout_scale = 10.0
             runner.setup
             runner.add_bot(path)
-            results = runner.run
-            if checksum.nil?
-                checksum = results[0][:protocol_checksum]
-            else
-                if checksum != results[0][:protocol_checksum]
-                    STDERR.puts "❌ Non-deterministic behaviour detected for bot at #{path}"
-                    exit(1)
-                end
-            end
+            results = runner.run            
+			# compare last checksum, if not nil, with current checksum
+			if (checksum != nil && checksum != results[0][:protocol_checksum])
+				STDERR.puts "❌ Non-deterministic behaviour detected for bot at #{path}"
+				exit(1)
+			end
+			# store checksum for next loop
+            checksum = results[0][:protocol_checksum]
         end
         STDERR.puts "✅ Bot at #{path} is likely deterministic."
     end
