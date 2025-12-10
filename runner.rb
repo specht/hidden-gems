@@ -84,7 +84,8 @@ module KeyInput
 
             VK = {
                 left:   0x25, up:    0x26, right: 0x27, down: 0x28,
-                home:   0x24, end_:  0x23, space: 0x20, q: 0x51
+                home:   0x24, end_:  0x23, space: 0x20, q: 0x51,
+                esc:    0x1B
             }.freeze
 
             KEYMAP = {
@@ -96,6 +97,7 @@ module KeyInput
                 VK[:end_]   => 'end',
                 VK[:space]  => ' ',
                 VK[:q]      => 'q',
+                VK[:esc]    => 'esc',
             }.freeze
 
             REPEATABLE = %w[left right up down home end].freeze
@@ -1461,6 +1463,8 @@ class Runner
                 begin
                     key = KeyInput.get_key(paused)
                     if key == 'q'
+                        exit
+                    elsif key == 'esc'
                         exit
                     elsif key == 'left'
                         @tick = [@tick - 1, 0].max
