@@ -1462,9 +1462,7 @@ class Runner
                 end
                 begin
                     key = KeyInput.get_key(paused)
-                    if key == 'q'
-                        exit
-                    elsif key == 'esc'
+                    if key == 'q' || key == 'esc'
                         exit
                     elsif key == 'left'
                         @tick = [@tick - 1, 0].max
