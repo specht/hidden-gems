@@ -590,6 +590,11 @@ class Runner
         Unicode::DisplayWidth.of(str.to_s, emoji: true, ambwidth: 1)
     end
 
+    def sanitize_emoji(str)
+        # Remove all characters with a width <= 0 from the string
+        str.each_grapheme_cluster.select { |g| vwidth(g) > 0 }.join
+    end
+
     def trim_ansi_to_width(str, max_width)
         ss      = StringScanner.new(str)
         out     = +""
@@ -913,7 +918,7 @@ class Runner
         if File.exist?(yaml_path)
             info = YAML.load(File.read(yaml_path))
             @bots.last[:name] = info['name'] if info['name'].is_a?(String)
-            @bots.last[:emoji] = info['emoji'] if info['emoji'].is_a?(String)
+            @bots.last[:emoji] = sanitize_emoji(info['emoji'].to_s) if info['emoji'].is_a?(String)
             if vwidth(@bots.last[:emoji]) > 2
                 raise "Error in bot.yaml: emoji must be at most 2 characters wide (#{@bots.last[:emoji]} is #{vwidth(@bots.last[:emoji])} characters wide)"
             end
