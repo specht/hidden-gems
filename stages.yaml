@@ -1,29 +1,39 @@
 stage-0@0.1:
     title: System Check
     from: '2025-10-06'
+    generator: arena
     width: 19
     height: 19
-    generator: arena
     emit_signals: false
     vis_radius: 100
     gem_spawn_rate: 0.05
 stage-0@0.2:
     title: System Check
     from: '2025-11-03'
-    width: 19..39
-    max_gems: 1..5
-    height: 19
     generator: arena
+    width: 19..39
+    height: 19
+    max_gems: 1..5
     emit_signals: false
     vis_radius: 100
     gem_spawn_rate: 0.04..0.06
 stage-1@0.1:
     title: Training Grounds
     from: '2025-11-17'
+    generator: cellular
     width: 29
     height: 19
-    generator: cellular
     max_gems: 1
     emit_signals: false
     vis_radius: 100
     gem_spawn_rate: 0.05
+stage-1@0.2:
+    title: Training Grounds
+    from: '2025-12-22'
+    width: 29..39
+    height: 19
+    generator: cellular
+    max_gems: 1..5
+    emit_signals: false
+    vis_radius: 100
+    gem_spawn_rate: 0.04..0.06
