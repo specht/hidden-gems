@@ -64,7 +64,8 @@ RUN set -eux; \
     ln -s "/opt/julia-${JULIA_VERSION}/bin/julia" /usr/local/bin/julia; \
     rm -f /tmp/julia.tgz; \
     mkdir -p "$JULIA_DEPOT_PATH"; \
-    julia -e 'using Pkg; Pkg.add("JSON"); using JSON; Pkg.precompile()'
+    julia -e 'using Pkg; Pkg.add("JSON"); using JSON; Pkg.precompile()' \
+    julia -e 'using Pkg; Pkg.add("DataStructures"); using JSON; Pkg.precompile()'
 
 # Install .NET
 RUN apt-get update && apt-get install -y wget gnupg ca-certificates \
