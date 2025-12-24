@@ -919,6 +919,9 @@ class Runner
             info = YAML.load(File.read(yaml_path))
             @bots.last[:name] = info['name'] if info['name'].is_a?(String)
             @bots.last[:emoji] = sanitize_emoji(info['emoji'].to_s) if info['emoji'].is_a?(String)
+            if @bots.last[:name] && @bots.last[:name].length > 32
+                raise "Error in bot.yaml: Bot name '#{@bots.last[:name]}' is too long (max 32 characters)"
+            end
             if vwidth(@bots.last[:emoji]) > 2
                 raise "Error in bot.yaml: emoji must be at most 2 characters wide (#{@bots.last[:emoji]} is #{vwidth(@bots.last[:emoji])} characters wide)"
             end
@@ -1079,6 +1082,7 @@ class Runner
                 @chatlog << {emoji: ANNOUNCER_EMOJI, text: "Two bots enter the maze:" }
             end
             comments = COMMENT_SINGLE.dup
+            
             @rng.shuffle!(comments)
             @bots.each.with_index do |bot, i|
                 @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{bot[:name]} #{bot[:emoji]} -- #{comments.shift}" }
