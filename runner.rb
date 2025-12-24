@@ -1747,10 +1747,6 @@ bot_paths = ARGV.map do |x|
     File.expand_path(x)
 end
 
-if bot_paths.size > 1
-    options[:enable_debug] = false
-end
-
 if options[:swap_bots]
     bot_paths.reverse!
     options[:docker_workdirs].reverse!
