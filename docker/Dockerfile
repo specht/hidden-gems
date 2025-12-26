@@ -64,7 +64,8 @@ RUN set -eux; \
     ln -s "/opt/julia-${JULIA_VERSION}/bin/julia" /usr/local/bin/julia; \
     rm -f /tmp/julia.tgz; \
     mkdir -p "$JULIA_DEPOT_PATH"; \
-    julia -e 'using Pkg; Pkg.add("JSON"); using JSON; Pkg.precompile()'
+    julia -e 'using Pkg; Pkg.add("JSON"); using JSON; Pkg.precompile()' \
+    julia -e 'using Pkg; Pkg.add("DataStructures"); using JSON; Pkg.precompile()'
 
 # Install .NET
 RUN apt-get update && apt-get install -y wget gnupg ca-certificates \
@@ -104,6 +105,7 @@ RUN mkdir -p /home/runner/.cargo && echo "[source.crates-io]\nreplace-with = \"v
 
 # Install Bun
 RUN curl -fsSL https://bun.com/install | bash
+ENV PATH="/home/runner/.bun/bin:$PATH"
 
 ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
 

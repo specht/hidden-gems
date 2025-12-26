@@ -29,7 +29,6 @@ require 'zlib'
 SOFT_LIMIT            = 0.100
 HARD_LIMIT            = 0.200
 HARD_LIMIT_FIRST_TICK = 20.0
-HARD_LIMIT_FIRST_TICK_CHECK_DETERMINISM = 60.0
 OVERTIME_BUDGET       = 1.5
 
 ANSI = /\e\[[0-9;:<>?]*[@-~]/
@@ -272,7 +271,7 @@ class Runner
 
     Bot = Struct.new(:stdin, :stdout, :stderr, :wait_thr)
 
-    attr_accessor :round, :stage_title, :stage_key
+    attr_accessor :round, :stage_title, :stage_key, :timeout_scale
     attr_reader :bots, :rng
 
     def initialize(seed:, width:, height:, generator:, max_ticks:,
@@ -283,7 +282,7 @@ class Runner
                    docker_workdirs:, rounds:, round_seeds:, verbose:,
                    max_tps:, announcer_enabled:, ansi_log_path:,
                    show_timings:, start_paused:, highlight_color:,
-                   enable_debug:
+                   enable_debug:, timeout_scale:
                    )
         @seed = seed
         @width = width
@@ -323,6 +322,7 @@ class Runner
         @start_paused = start_paused
         @highlight_color = highlight_color
         @enable_debug = enable_debug
+        @timeout_scale = timeout_scale
         @faded_highlight_color = mix_rgb_hex(@highlight_color, '#000000', 0.25)
         @demo_mode = @ansi_log_path && File.basename(@ansi_log_path).include?('demo')
 
@@ -607,6 +607,11 @@ class Runner
 
     def vwidth(str)
         Unicode::DisplayWidth.of(str.to_s, emoji: true, ambwidth: 1)
+    end
+
+    def sanitize_emoji(str)
+        # Remove all characters with a width <= 0 from the string
+        str.each_grapheme_cluster.select { |g| vwidth(g) > 0 }.join
     end
 
     def trim_ansi_to_width(str, max_width)
@@ -932,7 +937,10 @@ class Runner
         if File.exist?(yaml_path)
             info = YAML.load(File.read(yaml_path))
             @bots.last[:name] = info['name'] if info['name'].is_a?(String)
-            @bots.last[:emoji] = info['emoji'] if info['emoji'].is_a?(String)
+            @bots.last[:emoji] = sanitize_emoji(info['emoji'].to_s) if info['emoji'].is_a?(String)
+            if @bots.last[:name] && @bots.last[:name].length > 32
+                raise "Error in bot.yaml: Bot name '#{@bots.last[:name]}' is too long (max 32 characters)"
+            end
             if vwidth(@bots.last[:emoji]) > 2
                 raise "Error in bot.yaml: emoji must be at most 2 characters wide (#{@bots.last[:emoji]} is #{vwidth(@bots.last[:emoji])} characters wide)"
             end
@@ -1093,6 +1101,7 @@ class Runner
                 @chatlog << {emoji: ANNOUNCER_EMOJI, text: "Two bots enter the maze:" }
             end
             comments = COMMENT_SINGLE.dup
+            
             @rng.shuffle!(comments)
             @bots.each.with_index do |bot, i|
                 @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{bot[:name]} #{bot[:emoji]} -- #{comments.shift}" }
@@ -1223,7 +1232,7 @@ class Runner
                                 data[:config] = {}
                                 %w(stage_key width height generator max_ticks emit_signals vis_radius max_gems
                                     gem_spawn_rate gem_ttl signal_radius signal_cutoff signal_noise
-                                    signal_quantization signal_fade enable_debug).each do |key|
+                                    signal_quantization signal_fade enable_debug timeout_scale).each do |key|
                                     data[:config][key.to_sym] = instance_variable_get("@#{key}")
                                 end
                                 bot_seed = Digest::SHA256.digest("#{@seed}/bot").unpack1('L<')
@@ -1278,7 +1287,7 @@ class Runner
                     # 3b) WRITE PHASE: send to all eligible bots first
                     start_mono   = {}
                     deadline_mono = {}
-                    write_limit = (@tick == 0 ? (@check_determinism ? HARD_LIMIT_FIRST_TICK_CHECK_DETERMINISM : HARD_LIMIT_FIRST_TICK) : HARD_LIMIT)
+                    write_limit = (@tick == 0 ? HARD_LIMIT_FIRST_TICK : HARD_LIMIT) * @timeout_scale
                     (0...@bots.size).each do |_k|
                         i = (_k + bot_with_initiative) % @bots.size
                         next if @bots[i][:disqualified_for] || prepared[i].nil?
@@ -1381,12 +1390,12 @@ class Runner
 
                         elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - start_mono[i]
                         @bots[i][:response_times] << elapsed
-                        overtime = (@tick == 0 || @check_determinism) ? 0.0 : (elapsed - SOFT_LIMIT)
+                        overtime = (@tick == 0 || @check_determinism) ? 0.0 : (elapsed - SOFT_LIMIT * @timeout_scale)
                         @bots[i][:overtime_used] += overtime if overtime > 0.0
                         if @announcer_enabled && overtime.to_f > 0.0
                             @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} exceeded soft limit by #{(overtime * 1e3).to_i} ms (total overtime: #{(@bots[i][:overtime_used] * 1e3).to_i} ms)" }
                         end
-                        if @bots[i][:overtime_used] > OVERTIME_BUDGET
+                        if @bots[i][:overtime_used] > OVERTIME_BUDGET * @timeout_scale
                             if @bots[i][:disqualified_for].nil?
                                 @bots[i][:disqualified_for] = 'overtime_budget_exceeded'
                                 @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} has exceeded their overtime budget and is disqualified!" } if @announcer_enabled
@@ -1396,7 +1405,9 @@ class Runner
                         command = (line.split(' ').first || '').strip
                         debug_json = line[command.length..-1]&.strip
                         @protocol[i].last[:bots][:response] = command
-                        @protocol[i].last[:bots][:debug_json] = debug_json
+                        unless @check_determinism
+                            @protocol[i].last[:bots][:debug_json] = debug_json
+                        end
 
                         bot_position = @bots[i][:position]
                         if ['N','E','S','W'].include?(command)
@@ -1479,7 +1490,7 @@ class Runner
                 end
                 begin
                     key = KeyInput.get_key(paused)
-                    if key == 'q'
+                    if key == 'q' || key == 'esc'
                         exit
                     elsif key == 'left'
                         @tick = [@tick - 1, 0].max
@@ -1602,6 +1613,7 @@ options = {
     start_paused: false,
     highlight_color: '#ffffff',
     enable_debug: true,
+    timeout_scale: 1.0,
 }
 
 unless ARGV.include?('--stage')
@@ -1748,6 +1760,10 @@ OptionParser.new do |opts|
     opts.on("--[no-]enable-debug", "Enable debugging commands from bot (default: #{options[:enable_debug]})") do |x|
         options[:enable_debug] = x
     end
+    opts.on("--timeout-scale N", Float, "Timeout scale (default: #{options[:timeout_scale]}), 0 to disable timeouts") do |x|
+        x = 3600 * 24 if x <= 1e-6
+        options[:timeout_scale] = x
+    end
 end.parse!
 
 bot_paths = ARGV.map do |x|
@@ -1781,6 +1797,8 @@ if options[:check_determinism]
             runner = Runner.new(**options)
             runner.stage_title = stage_title if stage_title
             runner.stage_key = stage_key if stage_key
+            # allow for more time for bot startup and responses during determinism check
+            runner.timeout_scale = 10.0
             runner.setup
             runner.add_bot(path)
             results = runner.run
