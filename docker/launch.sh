@@ -8,4 +8,4 @@ source /home/runner/.cargo/env
 
 cd /app
 chmod +x start.sh
-exec ./start.sh
+exec ./start.sh "$@"

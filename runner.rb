@@ -507,7 +507,7 @@ class Runner
         end
     end
 
-    def start_bot(_path, workdir, &block)
+    def start_bot(_path, workdir, bot_args = [], &block)
         path = File.join(File.expand_path(_path), Gem.win_platform? ? 'start.bat' : 'start.sh')
         stdin, stdout, stderr, wait_thr = nil
         $timings.profile("launch bot") do
@@ -542,6 +542,8 @@ class Runner
                     args << "/app:rw,nosuid,nodev,exec,size=256m,uid=1000,gid=1000,mode=1777"
                 end
                 args << 'hidden-gems-runner'
+                args << '/launch.sh'
+                args.concat(bot_args)
                 stdin, stdout, stderr, wait_thr = Open3.popen3(*args)
             else
                 spawn_opts = { chdir: File.dirname(path) }
@@ -550,7 +552,7 @@ class Runner
                 else
                     spawn_opts[:pgroup] = true       # Linux/macOS
                 end
-                stdin, stdout, stderr, wait_thr = Open3.popen3([path, File.basename(path)], spawn_opts)
+                stdin, stdout, stderr, wait_thr = Open3.popen3([path, File.basename(path)], *bot_args, spawn_opts)
             end
         end
         stdin.sync = true
@@ -931,7 +933,7 @@ class Runner
         end
     end
 
-    def add_bot(path)
+    def add_bot(path, bot_args = [])
         @bots << {:position => @spawn_points.shift, :score => 0, :name => "Botty McBotface", :emoji => '🤖', :overtime_used => 0.0, :disqualified_for => nil, :response_times => [], :stderr_log => []}
         yaml_path = File.join(File.expand_path(path), 'bot.yaml')
         if File.exist?(yaml_path)
@@ -946,7 +948,7 @@ class Runner
             end
         end
         bot_index = @bots_io.size
-        @bots_io << start_bot(path, @docker_workdirs[bot_index]) do |line|
+        @bots_io << start_bot(path, @docker_workdirs[bot_index], bot_args) do |line|
             @message_queue << {:bot => bot_index, :line => line}
             @bots[bot_index][:stderr_log] << line
         end
@@ -1626,8 +1628,25 @@ GENERATORS = %w(arena divided eller icey cellular uniform digger rogue)
 stage_title = nil
 stage_key = nil
 write_profile_json_path = nil
+
+raw_argv = ARGV.dup
+dashdash = raw_argv.index('--')
+
+runner_argv = dashdash ? raw_argv[0...dashdash] : raw_argv
+passthrough = dashdash ? raw_argv[(dashdash + 1)..] : []
+
 OptionParser.new do |opts|
-    opts.banner = "Usage: ./runner.rb [options] /path/to/bot1 [/path/to/bot2]"
+    opts.banner = <<~BANNER
+    Usage: ./runner.rb [options] /path/to/bot1 [/path/to/bot2] [-- bot-args...]
+
+    Bot arguments:
+        Everything after '--' is passed to bots and will NOT be parsed by the runner.
+        If you run two bots, use '--bot-args' to split arguments:
+
+        ./runner.rb bot1 -- --foo 1 --bar
+        ./runner.rb bot1 bot2 -- --bot-args --foo 1 --bot-args --bar 2
+
+    BANNER
 
     opts.on('--stage STAGE', stages.keys + ['current'], "Stage (default: #{options[:stage]})") do |x|
         options[:stage] = x
@@ -1766,14 +1785,46 @@ OptionParser.new do |opts|
         x = 3600 * 24 if x <= 1e-6
         options[:timeout_scale] = x
     end
-end.parse!
+end.parse!(runner_argv)
 
-bot_paths = ARGV.map do |x|
-    File.expand_path(x)
+positional = runner_argv.dup
+
+if positional.empty?
+    positional = ["random-walker"]
+end
+
+if positional.size > 2
+    STDERR.puts "Error: At most two bots can compete. If you meant bot args, put them after '--'."
+    exit 1
+end
+
+bot_paths = positional.map { |x| File.expand_path(x) }
+
+bot_args = [[], []]
+current = 0
+seen_markers = 0
+
+passthrough.each do |tok|
+    if tok == '--bot-args'
+        seen_markers += 1
+        current = seen_markers - 1
+        if current > 1
+            STDERR.puts "Error: '--bot-args' can be used at most twice (bot1 then bot2)."
+            exit 1
+        end
+        next
+    end
+    bot_args[current] << tok
+end
+
+if bot_paths.size == 1 && bot_args[1].any?
+    STDERR.puts "Error: bot2 args were provided, but only one bot path was given."
+    exit 1
 end
 
 if options[:swap_bots]
     bot_paths.reverse!
+    bot_args.reverse!
     options[:docker_workdirs].reverse!
 end
 
@@ -1791,7 +1842,7 @@ if options[:check_determinism]
     seed_rng = PCG32.new(round_seed)
     seed = seed_rng.randrange(2 ** 32)
     options[:verbose] = 0
-    bot_paths.each do |path|
+    bot_paths.each.with_index do |path, i|
         STDERR.puts "Checking determinism of bot at #{path}..."
         checksum = nil
         2.times do
@@ -1802,7 +1853,7 @@ if options[:check_determinism]
             # allow for more time for bot startup and responses during determinism check
             runner.timeout_scale = 10.0
             runner.setup
-            runner.add_bot(path)
+            runner.add_bot(path, bot_args[i] || [])
             results = runner.run
             if checksum.nil?
                 checksum = results[0][:protocol_checksum]
@@ -1825,7 +1876,7 @@ if options[:rounds] == 1
     runner.stage_title = stage_title if stage_title
     runner.stage_key = stage_key if stage_key
     runner.setup
-    bot_paths.each { |path| runner.add_bot(path) }
+    bot_paths.each.with_index { |path, i| runner.add_bot(path, bot_args[i] || []) }
     results = runner.run
 
     if write_profile_json_path
@@ -1902,7 +1953,7 @@ else
         runner.stage_title = stage_title if stage_title
         runner.stage_key = stage_key if stage_key
         runner.setup
-        bot_paths.each { |path| runner.add_bot(path) }
+        bot_paths.each.with_index { |path, i| runner.add_bot(path, bot_args[i] || []) }
         if i == 0
             runner.bots.each.with_index do |bot, k|
                 bot_data << {:name => bot[:name], :emoji => bot[:emoji]}

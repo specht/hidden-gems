@@ -1,2 +1,2 @@
 @echo off
-ruby bot.rb
+ruby bot.rb %*

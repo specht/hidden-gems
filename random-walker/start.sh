@@ -1,2 +1,2 @@
 #!/bin/sh
-ruby bot.rb
+ruby bot.rb "$@"
