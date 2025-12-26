@@ -1488,26 +1488,28 @@ class Runner
                         end
                     end
                 end
-                begin
-                    key = KeyInput.get_key(paused)
-                    if key == 'q' || key == 'esc'
-                        exit
-                    elsif key == 'left'
-                        @tick = [@tick - 1, 0].max
-                        paused = true
-                    elsif key == 'home'
-                        @tick = 0
-                        paused = true
-                    # elsif key == 'end'
-                    #     @tick = @max_ticks - 1
-                    #     paused = true
-                    elsif key == 'right'
-                        @tick = [@tick + 1, @max_ticks].min
-                        paused = true
-                    elsif key == ' '
-                        paused = !paused
+                unless @verbose < 2 || @check_determinism
+                    begin
+                        key = KeyInput.get_key(paused)
+                        if key == 'q' || key == 'esc'
+                            exit
+                        elsif key == 'left'
+                            @tick = [@tick - 1, 0].max
+                            paused = true
+                        elsif key == 'home'
+                            @tick = 0
+                            paused = true
+                        # elsif key == 'end'
+                        #     @tick = @max_ticks - 1
+                        #     paused = true
+                        elsif key == 'right'
+                            @tick = [@tick + 1, @max_ticks].min
+                            paused = true
+                        elsif key == ' '
+                            paused = !paused
+                        end
+                    rescue
                     end
-                rescue
                 end
             end
             @bots_io.each do |b|
