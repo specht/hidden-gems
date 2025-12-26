@@ -73,85 +73,6 @@ if Gem.win_platform?
 end
 
 module KeyInput
-    if Gem.win_platform?
-        module Windows
-            extend self
-
-            module User32
-                extend Fiddle::Importer
-                dlload 'user32'
-                extern 'short GetAsyncKeyState(int)'
-            end
-
-            VK = {
-                left:   0x25, up:    0x26, right: 0x27, down: 0x28,
-                home:   0x24, end_:  0x23, space: 0x20, q: 0x51
-            }.freeze
-
-            KEYMAP = {
-                VK[:up]     => 'up',
-                VK[:down]   => 'down',
-                VK[:left]   => 'left',
-                VK[:right]  => 'right',
-                VK[:home]   => 'home',
-                VK[:end_]   => 'end',
-                VK[:space]  => ' ',
-                VK[:q]      => 'q',
-            }.freeze
-
-            REPEATABLE = %w[left right up down home end].freeze
-
-            INITIAL_REPEAT_DELAY = 0.30
-            REPEAT_INTERVAL      = 0.05
-
-            @prev_down = Hash.new(false)
-            @held_key_name = nil
-            @held_started_at = nil
-            @last_emit_at = nil
-
-            def get_key(paused)
-                loop do
-                    now = Time.now
-                    down_key_name = nil
-
-                    KEYMAP.each do |vk, name|
-                        down_now = (User32.GetAsyncKeyState(vk) & 0x8000) != 0
-                        @prev_down[vk] = down_now
-                        if down_now && down_key_name.nil?
-                            down_key_name = name
-                        end
-                    end
-
-                    unless down_key_name
-                        @held_key_name = nil
-                        @held_started_at = nil
-                        @last_emit_at = nil
-                        return nil unless paused
-                        sleep 0.01
-                        next
-                    end
-
-                    if @held_key_name != down_key_name
-                        @held_key_name = down_key_name
-                        @held_started_at = now
-                        @last_emit_at = now
-                        return down_key_name
-                    else
-                        if REPEATABLE.include?(down_key_name)
-                            if (now - @held_started_at) >= INITIAL_REPEAT_DELAY &&
-                                (now - @last_emit_at)   >= REPEAT_INTERVAL
-                                @last_emit_at = now
-                                return down_key_name
-                            end
-                        end
-                        return nil unless paused
-                        sleep 0.01
-                    end
-                end
-            end
-        end
-    end
-
     module Posix
         extend self
 
@@ -168,18 +89,114 @@ module KeyInput
                     c3 = stdin.read_nonblock(1, exception: false)
                     seq = key + (c2 || "") + (c3 || "")
                     case seq
-                    when "\e[A" then return 'up'
-                    when "\e[B" then return 'down'
-                    when "\e[C" then return 'right'
-                    when "\e[D" then return 'left'
-                    when "\e[H" then return 'home'
-                    when "\e[F" then return 'end'
+                    when "\e[A" then "up"
+                    when "\e[B" then "down"
+                    when "\e[C" then "right"
+                    when "\e[D" then "left"
+                    when "\e[H" then "home"
+                    when "\e[F" then "end"
                     else
-                        return nil
+                        nil
                     end
                 else
-                    return key
+                    key
                 end
+            end
+        end
+    end
+
+    if Gem.win_platform?
+        module Windows
+            extend self
+
+            module Kernel32
+                extend Fiddle::Importer
+                dlload "kernel32"
+
+                typealias "HANDLE", "void*"
+                typealias "DWORD",  "unsigned long"
+                typealias "WORD",   "unsigned short"
+                typealias "BOOL",   "int"
+
+                extern "HANDLE GetStdHandle(DWORD)"
+                extern "BOOL   GetConsoleMode(HANDLE, void*)"
+                extern "BOOL   PeekConsoleInputW(HANDLE, void*, DWORD, void*)"
+                extern "BOOL   ReadConsoleInputW(HANDLE, void*, DWORD, void*)"
+            end
+
+            STD_INPUT_HANDLE = -10
+            KEY_EVENT        = 0x0001
+
+            VK_MAP = {
+                0x25 => "left",
+                0x26 => "up",
+                0x27 => "right",
+                0x28 => "down",
+                0x24 => "home",
+                0x23 => "end",
+            }.freeze
+
+            def console_stdin?
+                h = Kernel32.GetStdHandle(STD_INPUT_HANDLE)
+                mode_ptr = Fiddle::Pointer.malloc(4)
+                Kernel32.GetConsoleMode(h, mode_ptr) != 0
+            rescue
+                false
+            end
+
+            # INPUT_RECORD for KEY_EVENT (20 bytes):
+            # WORD EventType; WORD pad;
+            # KEY_EVENT_RECORD:
+            #   DWORD bKeyDown;
+            #   WORD  wRepeatCount;
+            #   WORD  wVirtualKeyCode;
+            #   WORD  wVirtualScanCode;
+            #   WCHAR UnicodeChar;  (WORD)
+            #   DWORD dwControlKeyState;
+            INPUT_RECORD_SIZE = 20
+
+            def read_key_event(paused)
+                h = Kernel32.GetStdHandle(STD_INPUT_HANDLE)
+
+                record = Fiddle::Pointer.malloc(INPUT_RECORD_SIZE)
+                read   = Fiddle::Pointer.malloc(4)
+
+                loop do
+                if !paused
+                    ok = Kernel32.PeekConsoleInputW(h, record, 1, read)
+                    return nil if ok == 0 || read[0, 4].unpack1("L<") == 0
+                end
+
+                ok = Kernel32.ReadConsoleInputW(h, record, 1, read)
+                return nil if ok == 0 || read[0, 4].unpack1("L<") == 0
+
+                data = record[0, INPUT_RECORD_SIZE]
+                event_type, key_down, repeat, vk, _scan, uchar, _ctrl =
+                    data.unpack("S< x2 L< S< S< S< S< L<")
+
+                next unless event_type == KEY_EVENT
+                next unless key_down != 0
+
+                mapped = VK_MAP[vk]
+                return mapped if mapped
+
+                if uchar && uchar != 0
+                    ch = [uchar].pack("S<").force_encoding("UTF-16LE").encode("UTF-8")
+
+                    return "\n" if ch == "\r"
+
+                    return ch
+                end
+
+                next
+                end
+            end
+
+            def get_key(paused, stdin: STDIN)
+                if console_stdin?
+                    return read_key_event(paused)
+                end
+                Posix.get_key(paused, stdin: stdin)
             end
         end
     end
@@ -187,7 +204,11 @@ module KeyInput
     module_function
 
     def get_key(paused, stdin: STDIN)
-        Gem.win_platform? ? Windows.get_key(paused) : Posix.get_key(paused, stdin: stdin)
+        if Gem.win_platform?
+        Windows.get_key(paused, stdin: stdin)
+        else
+        Posix.get_key(paused, stdin: stdin)
+        end
     end
 end
 
