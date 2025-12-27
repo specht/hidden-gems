@@ -31,6 +31,10 @@ HARD_LIMIT            = 0.200
 HARD_LIMIT_FIRST_TICK = 20.0
 OVERTIME_BUDGET       = 1.5
 
+OPTIONS_FOR_BOT = %w(stage_key width height generator max_ticks emit_signals vis_radius max_gems
+                     gem_spawn_rate gem_ttl signal_radius signal_cutoff signal_noise
+                     signal_quantization signal_fade enable_debug timeout_scale)
+
 ANSI = /\e\[[0-9;:<>?]*[@-~]/
 
 $timings = Timings.new
@@ -346,6 +350,12 @@ class Runner
                 new_value = (new_value * 100.0).round() / 100.0
                 instance_variable_set(key, new_value)
             end
+        end
+    end
+
+    def options_hash
+        OPTIONS_FOR_BOT.each_with_object({}) do |key, h|
+            h[key.to_sym] = instance_variable_get("@#{key}")
         end
     end
 
@@ -1232,9 +1242,7 @@ class Runner
                         $timings.profile("prepare data") do
                             if @tick == 0
                                 data[:config] = {}
-                                %w(stage_key width height generator max_ticks emit_signals vis_radius max_gems
-                                    gem_spawn_rate gem_ttl signal_radius signal_cutoff signal_noise
-                                    signal_quantization signal_fade enable_debug timeout_scale).each do |key|
+                                OPTIONS_FOR_BOT.each do |key|
                                     data[:config][key.to_sym] = instance_variable_get("@#{key}")
                                 end
                                 bot_seed = Digest::SHA256.digest("#{@seed}/bot").unpack1('L<')
@@ -1907,6 +1915,7 @@ if options[:rounds] == 1
             report[:floor_coverage_mean]  = tc if tc
 
             round_entry = {
+                :options => runner.options_hash(),
                 :seed => options[:seed].to_s(36),
                 :score => score,
                 :gem_utilization => gu,
@@ -1938,6 +1947,7 @@ else
     all_disqualified_for = bot_paths.map { [] }
     all_response_time_stats = bot_paths.map { [] }
     all_stderr_logs = bot_paths.map { [] }
+    all_options = []
 
     bot_data = []
 
@@ -1959,6 +1969,7 @@ else
                 bot_data << {:name => bot[:name], :emoji => bot[:emoji]}
             end
         end
+        all_options << runner.options_hash()
         results = runner.run
         (0...bot_paths.size).each do |k|
             all_score[k] << results[k][:score]
@@ -2002,6 +2013,7 @@ else
         report[:floor_coverage_mean] = mean(all_tc[i])
         report[:rounds] = all_score[i].map.with_index do |_, k|
             d = {
+                :options => all_options[k],
                 :seed => all_seed[k].to_s(36),
                 :score => all_score[i][k],
                 :gem_utilization => all_utilization[i][k],
