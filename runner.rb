@@ -284,9 +284,9 @@ class Runner
                    signal_noise:, signal_cutoff:, signal_fade:, swap_bots:,
                    cache:, profile:, check_determinism:, use_docker:,
                    docker_workdirs:, rounds:, round_seeds:, verbose:,
-                   max_tps:, announcer_enabled:, ansi_log_path:,
-                   show_timings:, start_paused:, highlight_color:,
-                   enable_debug:, timeout_scale:
+                   max_tps:, announcer_enabled:, bot_chatter:,
+                   ansi_log_path:, show_timings:, start_paused:,
+                   highlight_color:, enable_debug:, timeout_scale:
                    )
         @seed = seed
         @width = width
@@ -320,6 +320,7 @@ class Runner
         @stage_title = '(no stage)'
         @stage_key = '(no stage)'
         @announcer_enabled = announcer_enabled
+        @bot_chatter = bot_chatter
         @ansi_log_path = ansi_log_path
         @ansi_log = []
         @show_timings = show_timings
@@ -1135,7 +1136,9 @@ class Runner
                     until @message_queue.empty?
                         temp = @message_queue.pop(true) rescue nil
                         next if temp.nil?
-                        @chatlog << {emoji: @bots[temp[:bot]][:emoji], text: temp[:line].chomp}
+                        if @bot_chatter
+                            @chatlog << {emoji: @bots[temp[:bot]][:emoji], text: temp[:line].chomp}
+                        end
                     end
 
                     (0...@bots.size).each do |i|
@@ -1620,6 +1623,7 @@ options = {
     rounds: 1,
     round_seeds: nil,
     announcer_enabled: true,
+    bot_chatter: true,
     ansi_log_path: nil,
     show_timings: false,
     start_paused: false,
@@ -1769,6 +1773,9 @@ OptionParser.new do |opts|
     end
     opts.on("--[no-]announcer", "Add announcer to chat log (default: #{options[:announcer_enabled]})") do |x|
         options[:announcer_enabled] = x
+    end
+    opts.on("--[no-]bot-chatter", "Allow bots to add messages to chat log (default: #{options[:bot_chatter]})") do |x|
+        options[:bot_chatter] = x
     end
     opts.on("--ansi-log-path PATH", "Write ANSI and stdin log to JSON file (ends in .json.gz)") do |x|
         options[:ansi_log_path] = x
