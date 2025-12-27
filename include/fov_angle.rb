@@ -95,7 +95,7 @@ module FOVAngle
         by_d2.keys.sort.map { |d2| by_d2[d2].freeze }
     end
 
-    def visible_packed_via_block(w, h, ox, oy, radius:)
+    def visible_packed_via_block(w, h, ox, oy, radius:, &opaque_block)
         return [] unless ox.between?(0, w - 1) && oy.between?(0, h - 1)
 
         template = template_for_radius(radius)
@@ -122,7 +122,7 @@ module FOVAngle
 
                 vis << ((y << 16) | x)
 
-                if yield(x, y)
+                if opaque_block.call(x, y)
                     spans.each { |se| pending << se }
                 end
             end
