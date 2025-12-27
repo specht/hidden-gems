@@ -59,7 +59,7 @@ module FOVAngle
         raise ArgumentError, "need an opaque? block" unless block_given?
         # Use visible_packed then convert.
         # Note: uses the block rather than maze_set, so we cannot avoid block dispatch here.
-        packed_list = visible_packed_via_block(w, h, ox, oy, radius:, &opaque_block)
+        packed_list = visible_packed_via_block(w, h, ox, oy, radius: radius, &opaque_block)
         s = Set.new
         packed_list.each do |p|
             x = p & 0xFFFF
