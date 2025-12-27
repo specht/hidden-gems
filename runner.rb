@@ -448,8 +448,8 @@ class Runner
                             offset = (y << 16) | x
                             v = Set.new()
                             unless @maze.include?(offset)
-                                visible = FOVAngle.visible(@width, @height, @maze, x, y, radius: @vis_radius) { |xx, yy| @maze.include?((yy << 16) | xx) }
-                                v = visible.to_a.map { |p| (p[1] << 16) | p[0] }.sort
+                                v = FOVAngle.visible_packed(@width, @height, @maze, x, y, radius: @vis_radius)
+                                v.sort!
                             end
                             @visibility[offset] = Set.new(v)
                         end
