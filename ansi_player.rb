@@ -147,11 +147,7 @@ class HgAnsiCliPlayer
         screen = frame["screen"]
         screen = screen.to_s
 
-        # In your runner output it’s common that frames already include cursor moves.
-        # If you ever produce frames WITHOUT \e[H, uncomment the next line:
-        # STDOUT.write("\e[H")
-
-        STDOUT.write("\e[2J\e[H")
+        STDOUT.write("\e[H")
         STDOUT.write(screen)
         STDOUT.flush
     end
