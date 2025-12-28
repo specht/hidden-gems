@@ -56,6 +56,7 @@ module KeyInput
             KEY_EVENT        = 0x0001
 
             VK_MAP = {
+                0x1B => "esc",
                 0x25 => "left",
                 0x26 => "up",
                 0x27 => "right",
