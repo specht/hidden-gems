@@ -207,7 +207,7 @@ class Runner
             value = instance_variable_get(key)
             if value.is_a?(String) && value.include?('..')
                 parts = value.split('..').map { |x| x.strip.to_f }
-                new_value = parts[0] + param_rng.next_float * (parts[1] - parts[0] + 1)
+                new_value = parts[0] + param_rng.next_float * (parts[1] - parts[0])
                 new_value = (new_value * 100.0).floor() / 100.0
                 instance_variable_set(key, new_value)
             end
