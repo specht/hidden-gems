@@ -1160,16 +1160,18 @@ class Runner
                     # 3b) WRITE PHASE: send to all eligible bots first
                     start_mono   = {}
                     deadline_mono = {}
+                    received_mono = {}
                     write_limit = (@tick == 0 ? HARD_LIMIT_FIRST_TICK : HARD_LIMIT) * @timeout_scale
                     (0...@bots.size).each do |_k|
                         i = (_k + bot_with_initiative) % @bots.size
                         next if @bots[i][:disqualified_for] || prepared[i].nil?
-                        start_mono[i]    = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-                        deadline_mono[i] = start_mono[i] + write_limit
                         $timings.profile("write to bot's stdin") do
                             begin
                                 @bots_io[i].stdin.puts(prepared[i].to_json)
                                 @bots_io[i].stdin.flush
+                                # Start the response timer only after the input has actually been delivered.
+                                start_mono[i]    = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+                                deadline_mono[i] = start_mono[i] + write_limit
                             rescue Errno::EPIPE
                                 if @bots[i][:disqualified_for].nil?
                                     @bots[i][:disqualified_for] = 'terminated_unexpectedly'
@@ -1200,27 +1202,10 @@ class Runner
                         min_remaining = 0.0 if pending.any? { |i| now_mono >= deadline_mono[i] }
 
                         ready, = IO.select(read_ios, nil, nil, min_remaining)
-                        now_mono = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+                        ready ||= []
 
-                        # Mark hard timeouts
-                        pending.dup.each do |i|
-                            if now_mono >= deadline_mono[i] && !responses.key?(i)
-                                if @bots[i][:disqualified_for].nil?
-                                    @bots[i][:disqualified_for] = "hard_timeout"
-                                    elapsed = now_mono - start_mono[i]
-                                    if @announcer_enabled
-                                        @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} took too long to respond (#{(elapsed * 1000).to_i} ms) and has been terminated!" }
-                                    end
-                                end
-                                io = @bots_io[i].stdout
-                                read_ios.delete(io)
-                                pending.delete(i)
-                            end
-                        end
-                        break if read_ios.empty?
-
-                        next if ready.nil? # nothing readable yet; loop will handle any new timeouts
-
+                        # Always drain any ready stdout first; otherwise a bot can be falsely hard-timed-out
+                        # simply because the runner was busy with other bots.
                         ready.each do |io|
                             i = stdout_map[io]
                             next unless pending.include?(i)
@@ -1242,9 +1227,27 @@ class Runner
                                 if (nl = @stdout_buffers[i].index("\n"))
                                     line = @stdout_buffers[i].slice!(0..nl).strip
                                     responses[i] = line
+                                    received_mono[i] = Process.clock_gettime(Process::CLOCK_MONOTONIC)
                                     read_ios.delete(io)
                                     pending.delete(i)
                                 end
+                            end
+                        end
+
+                        # Now mark hard timeouts for bots still pending without a full line.
+                        now_mono = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+                        pending.dup.each do |i|
+                            if now_mono >= deadline_mono[i] && !responses.key?(i)
+                                if @bots[i][:disqualified_for].nil?
+                                    @bots[i][:disqualified_for] = "hard_timeout"
+                                    elapsed = now_mono - start_mono[i]
+                                    if @announcer_enabled
+                                        @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} took too long to respond (#{(elapsed * 1000).to_i} ms) and has been terminated!" }
+                                    end
+                                end
+                                io = @bots_io[i].stdout
+                                read_ios.delete(io)
+                                pending.delete(i)
                             end
                         end
                     end
@@ -1261,7 +1264,10 @@ class Runner
                             next
                         end
 
-                        elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - start_mono[i]
+                        # Use the moment we actually received this bot's newline-terminated response.
+                        # Otherwise a slow opponent inflates everyone's "elapsed" (and overtime).
+                        recv_t = received_mono[i] || Process.clock_gettime(Process::CLOCK_MONOTONIC)
+                        elapsed = recv_t - start_mono[i]
                         @bots[i][:response_times] << elapsed
                         overtime = (@tick == 0 || @check_determinism) ? 0.0 : (elapsed - SOFT_LIMIT * @timeout_scale)
                         @bots[i][:overtime_used] += overtime if overtime > 0.0
