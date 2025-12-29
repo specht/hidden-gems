@@ -1292,6 +1292,7 @@ class Runner
                                     target_occupied_by_bot = nil
                                     (0...@bots.size).each do |other|
                                         next if other == i
+                                        next if @bots[other][:disqualified_for]
                                         if @bots[other][:position] == [dx, dy]
                                             target_occupied_by_bot = other
                                             break
@@ -1747,6 +1748,9 @@ end
 og_seed = options[:seed]
 
 if options[:rounds] == 1
+    if options[:round_seeds]
+        options[:seed] = options[:round_seeds].first.to_i(36)
+    end
     runner = Runner.new(**options)
     runner.stage_title = stage_title if stage_title
     runner.stage_key = stage_key if stage_key
