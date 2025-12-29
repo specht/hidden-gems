@@ -1,4 +1,6 @@
 require "io/console"
+require 'fiddle'
+require 'fiddle/import'
 
 module KeyInput
     module Posix
