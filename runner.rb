@@ -207,7 +207,7 @@ class Runner
             value = instance_variable_get(key)
             if value.is_a?(String) && value.include?('..')
                 parts = value.split('..').map { |x| x.strip.to_f }
-                new_value = parts[0] + param_rng.next_float * (parts[1] - parts[0])
+                new_value = parts[0] + param_rng.next_float * (parts[1] - parts[0] + 0.01)
                 new_value = (new_value * 100.0).floor() / 100.0
                 instance_variable_set(key, new_value)
             end
@@ -974,7 +974,7 @@ class Runner
                 @chatlog << {emoji: ANNOUNCER_EMOJI, text: "Two bots enter the maze:" }
             end
             comments = COMMENT_SINGLE.dup
-            
+
             @rng.shuffle!(comments)
             @bots.each.with_index do |bot, i|
                 @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{bot[:name]} #{bot[:emoji]} -- #{comments.shift}" }
