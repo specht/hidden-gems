@@ -10,18 +10,18 @@ ENV DEBIAN_FRONTEND=noninteractive \
     NPM_CONFIG_AUDIT=false
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends \
-      ca-certificates curl git tini tzdata locales \
-      build-essential make pkg-config \
-      python3 python3-venv python3-pip \
-      ruby-full bundler \
-      nodejs npm \
-      default-jdk \
-      lua5.4 \
-      libc6 libstdc++6 libgcc-s1 zlib1g libssl3 \
-      rsync wget nodejs php \
-      fpc fp-units-fcl libjansson-dev \
- && rm -rf /var/lib/apt/lists/*
+    && apt-get install -y --no-install-recommends \
+    ca-certificates curl git tini tzdata locales \
+    build-essential make pkg-config \
+    python3 python3-venv python3-pip \
+    ruby-full bundler \
+    nodejs npm \
+    default-jdk \
+    lua5.4 \
+    libc6 libstdc++6 libgcc-s1 zlib1g libssl3 \
+    rsync wget nodejs php \
+    fpc fp-units-fcl libjansson-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 ARG GO_VERSION=1.25.4
 ENV GOTOOLCHAIN=local PATH="/usr/local/go/bin:${PATH}"
@@ -37,7 +37,7 @@ RUN set -eux; \
 RUN apt-get update && apt-get install -y wget apt-transport-https software-properties-common gnupg \
     && wget -q https://packages.microsoft.com/keys/microsoft.asc -O- | gpg --dearmor -o /usr/share/keyrings/microsoft.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/microsoft.gpg] \
-       https://packages.microsoft.com/debian/12/prod bookworm main" > /etc/apt/sources.list.d/microsoft.list \
+    https://packages.microsoft.com/debian/12/prod bookworm main" > /etc/apt/sources.list.d/microsoft.list \
     && apt-get update \
     && apt-get install -y powershell \
     && rm -rf /var/lib/apt/lists/*
@@ -59,7 +59,7 @@ ENV JULIA_DEPOT_PATH=/usr/local/julia
 RUN set -eux; \
     apt-get update && apt-get install -y --no-install-recommends ca-certificates curl xz-utils && rm -rf /var/lib/apt/lists/*; \
     curl -fsSL "https://julialang-s3.julialang.org/bin/linux/x64/1.11/julia-${JULIA_VERSION}-linux-x86_64.tar.gz" \
-      -o /tmp/julia.tgz; \
+    -o /tmp/julia.tgz; \
     tar -xzf /tmp/julia.tgz -C /opt; \
     ln -s "/opt/julia-${JULIA_VERSION}/bin/julia" /usr/local/bin/julia; \
     rm -f /tmp/julia.tgz; \
@@ -69,13 +69,13 @@ RUN set -eux; \
 
 # Install .NET
 RUN apt-get update && apt-get install -y wget gnupg ca-certificates \
- && apt-get update \
- # install .NET 9 runtime (STS). Use 8.0 for LTS.
- && apt-get install -y dotnet-runtime-9.0 dotnet-sdk-9.0 unzip \
- && rm -rf /var/lib/apt/lists/*
+    && apt-get update \
+    # install .NET 9 runtime (STS). Use 8.0 for LTS.
+    && apt-get install -y dotnet-runtime-9.0 dotnet-sdk-9.0 unzip \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN sed -i 's/# \(en_US.UTF-8 UTF-8\)/\1/' /etc/locale.gen \
- && locale-gen
+    && locale-gen
 
 COPY launch.sh /launch.sh
 RUN chmod +x /launch.sh
@@ -87,7 +87,7 @@ RUN groupadd -g ${GROUP_ID} runner && useradd -m -u ${USER_ID} -g ${GROUP_ID} -s
 WORKDIR /app
 RUN chown -R runner:runner /app
 RUN chown -R runner:runner /usr/local/julia
-RUN python3 -m pip install --break-system-packages numpy networkx
+RUN python3 -m pip install --break-system-packages numpy networkx sortedcontainers
 
 # Install zig 0.15.2
 ARG ZIG_VERSION=0.15.2
