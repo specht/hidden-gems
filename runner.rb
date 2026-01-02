@@ -1979,7 +1979,7 @@ else
         end
     end
     puts
-
+    puts "Ran on Seed #{seed}"
     all_reports = []
     bot_data.each.with_index do |data, i|
         puts "Results for #{data[:emoji]} #{data[:name]}"
