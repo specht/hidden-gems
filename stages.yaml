@@ -37,3 +37,15 @@ stage-1@0.2:
     emit_signals: false
     vis_radius: 100
     gem_spawn_rate: 0.04..0.06
+stage-2@0.1:
+    title: Dark Signal
+    from: '2026-01-05'
+    generator: cellular
+    width: 49
+    height: 29
+    max_gems: 2..3
+    emit_signals: true
+    signal_radius: 5..10
+    vis_radius: 5..15
+    gem_spawn_rate: 0.05
+    max_ticks: 1200

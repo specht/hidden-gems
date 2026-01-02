@@ -17,6 +17,7 @@ require 'digest'
 require 'fileutils'
 require 'json'
 require 'open3'
+require 'openssl'
 require 'optparse'
 require 'paint'
 require 'set'
@@ -882,10 +883,11 @@ class Runner
 
         # pre-calculate gem level
         level = {}
+        seen = {}
         wavefront = Set.new()
-        wavefront << [gem[:position][0], gem[:position][1]]
-        level[(gem[:position][1] << 16) | gem[:position][0]] = 1.0
-        distance = 0
+        gx = gem[:position][0]
+        gy = gem[:position][1]
+        wavefront << [gx, gy]
         while !wavefront.empty?
             new_wavefront = Set.new()
             wavefront.each do |p|
@@ -896,20 +898,25 @@ class Runner
                     dy = py + d[1]
                     if dx >= 0 && dy >= 0 && dx < @width && dy < @height
                         offset = (dy << 16) | dx
-                        if !level.include?(offset) && !@maze.include?(offset)
-                            l = Math.exp(-distance / @signal_radius)
+                        if !seen.include?(offset)
+                            dist = Math.sqrt((dx - gx) * (dx - gx) + (dy - gy) * (dy - gy))
+                            r = @signal_radius.to_f
+                            l = 1.0 / (1.0 + (dist / r) * (dist / r))
                             if @signal_quantization > 0
-                                l = ((l * @signal_quantization).to_i).to_f / @signal_quantization
+                                q = @signal_quantization.to_f
+                                l = ((l * q).floor).to_f / q
                             end
-                            l = 0.0 if l < @signal_cutoff
-                            level[offset] = l
+                            l = 0.0 if l < @signal_cutoff.to_f
+                            unless @maze.include?(offset)
+                                level[offset] = l
+                            end
+                            seen[offset] = true
                             new_wavefront << [dx, dy]
                         end
                     end
                 end
             end
             wavefront = new_wavefront
-            distance += 1
         end
         gem[:level] = level
 
@@ -1108,7 +1115,8 @@ class Runner
                                 OPTIONS_FOR_BOT.each do |key|
                                     data[:config][key.to_sym] = instance_variable_get("@#{key}")
                                 end
-                                bot_seed = Digest::SHA256.digest("#{@seed}/bot").unpack1('L<')
+                                dk = OpenSSL::PKCS5.pbkdf2_hmac("#{@seed}/bot/#{i}", "scrim:v1:#{@seed}", 200_000, 4, "sha256")
+                                bot_seed = dk.unpack1("L<")
                                 data[:config][:bot_seed] = bot_seed
                             end
                             data[:tick] = @tick
@@ -1467,7 +1475,7 @@ options = {
     width: 19,
     height: 19,
     generator: 'arena',
-    seed: rand(2 ** 32),
+    seed: rand(2 ** 48),
     max_ticks: 1000,
     vis_radius: 10,
     max_gems: 1,
@@ -1722,7 +1730,7 @@ end
 if options[:check_determinism]
     round_seed = Digest::SHA256.digest("#{options[:seed]}/check-determinism").unpack1('L<')
     seed_rng = PCG32.new(round_seed)
-    seed = seed_rng.randrange(2 ** 32)
+    seed = seed_rng.randrange(2 ** 48)
     options[:verbose] = 0
     bot_paths.each.with_index do |path, i|
         STDERR.puts "Checking determinism of bot at #{path}..."
@@ -1832,7 +1840,7 @@ else
         if options[:round_seeds]
             options[:seed] = options[:round_seeds][i].to_i(36)
         else
-            options[:seed] = seed_rng.randrange(2 ** 32)
+            options[:seed] = seed_rng.randrange(2 ** 48)
         end
         all_seed << options[:seed]
         runner = Runner.new(**options)
