@@ -1424,6 +1424,7 @@ class Runner
                         end
 
                         bot_position = @bots[i][:position]
+                        prev_bot_position = bot_position.dup
                         if ['N','E','S','W'].include?(command)
                             dir = {'N'=>[0,-1],'E'=>[1,0],'S'=>[0,1],'W'=>[-1,0]}
                             dx = bot_position[0] + dir[command][0]
@@ -1440,7 +1441,6 @@ class Runner
                                         end
                                     end
                                     @bots[i][:position] = [dx, dy] if target_occupied_by_bot.nil?
-                                    @events << { tick: @tick, type: 'bot_moved', bot: i, position: @bots[i][:position]  }
                                 end
                             end
                         elsif command == 'WAIT'
@@ -1448,6 +1448,7 @@ class Runner
                         else
                             # invalid command -> ignore
                         end
+                        @events << { tick: @tick, type: 'bot_moved', bot: i, from: prev_bot_position, to: @bots[i][:position], command: command[0, 16] }
                     end
 
                     # STEP 4: COLLECT GEMS & DECAY GEMS
