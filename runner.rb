@@ -1510,7 +1510,7 @@ class Runner
                         if @gem_fel_index < @gem_fel.size
                             if @tick >= @gem_fel[@gem_fel_index][:tick]
                                 ttl_spawned += spawn_gem()
-                                @events << { tick: @tick, type: 'gem_spawned', position: @gems.last[:position], ttl: @gems.last[:ttl], gem_id: @gems.last[:id] }
+                                @events << { tick: @tick, type: 'gem_spawned', position: @gems.last[:position], ttl: @gems.last[:ttl], id: @gems.last[:id] }
                             end
                         end
                     end
