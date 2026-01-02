@@ -1989,6 +1989,8 @@ else
     end
     puts
 
+    puts "Ran on seed #{og_seed.to_s(36)} with #{options[:rounds]} rounds."
+
     all_reports = []
     bot_data.each.with_index do |data, i|
         puts "Results for #{data[:emoji]} #{data[:name]}"
