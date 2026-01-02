@@ -947,6 +947,90 @@ class Runner
         end
     end
 
+    def varint_size(n)
+        size = 1
+        while n >= 0x80
+            n >>= 7
+            size += 1
+        end
+        size
+    end
+
+    def write_varint(io, n)
+        # unsigned LEB128
+        while n >= 0x80
+            io << ((n & 0x7f) | 0x80)
+            n >>= 7
+        end
+        io << (n & 0x7f)
+    end
+
+    def sparse_payload(entries, width)
+        # entries: [x, y, idx]
+        linear = entries.map { |x, y, idx| [y * width + x, idx] }
+        linear.sort_by!(&:first)
+
+        out = [linear.length]
+        prev_i = 0
+        linear.each do |i, idx|
+            out << (i - prev_i)
+            out << idx
+            prev_i = i
+        end
+        out
+    end
+
+    def sparse_bytes(payload)
+        payload.sum { |n| varint_size(n) }
+    end
+
+    def rle_payload(entries, width, height)
+        # Build a full index grid with 0=transparent.
+        grid = Array.new(height) { Array.new(width, 0) }
+        entries.each { |x, y, idx| grid[y][x] = idx }
+
+        out = []
+        grid.each do |row|
+            prev = row[0]
+            run_len = 1
+
+            row[1..].each do |v|
+                if v == prev
+                    run_len += 1
+                else
+                    out << run_len
+                    out << prev
+                    prev = v
+                    run_len = 1
+                end
+            end
+
+            out << run_len
+            out << prev
+        end
+        out
+    end
+
+    def rle_bytes(payload)
+        payload.sum { |n| varint_size(n) }
+    end
+
+    def encode_overlay(entries, width, height)
+        return nil if entries.nil? || entries.empty?
+
+        sp = sparse_payload(entries, width)
+        sp_bytes = sparse_bytes(sp)
+
+        rl = rle_payload(entries, width, height)
+        rl_bytes = rle_bytes(rl)
+
+        if sp_bytes <= rl_bytes
+            { type: :sparse, bytes: sp_bytes, data: sp }
+        else
+            { type: :rle, bytes: rl_bytes, data: rl }
+        end
+    end
+    
     def run
         trap("INT") do
             @bots_io.each { |b| b.stdin.close rescue nil }
@@ -969,6 +1053,8 @@ class Runner
             Set.new()
         end
         ttl_spawned = 0
+        color_to_index = {'#00000000' => 0}
+        index_to_color = ['#00000000']
 
         @protocol = @bots.map { |b| [] }
         if @announcer_enabled
@@ -1078,7 +1164,31 @@ class Runner
                         end
                         frames << screen
                         if @ansi_log_path
-                            @ansi_log << {:screen => screen}
+                            log_entry = {:screen => screen}
+                            log_entry[:highlight] = []
+                            @bots.each.with_index do |bot, i|
+                                debug_json = ((@protocol[i][-2] || {})[:bots] || {})[:debug_json]
+                                debug_obj = nil
+                                highlight_indices = []
+                                begin
+                                    debug_obj = JSON.parse(debug_json) if debug_json
+                                    highlight_indices = debug_obj['highlight'].map do |entry|
+                                        x = entry[0]
+                                        y = entry[1]
+                                        color = entry[2].downcase
+                                        unless index_to_color.include?(color)
+                                            color_to_index[color] = index_to_color.size
+                                            index_to_color << color
+                                        end
+                                        index = color_to_index[color]
+                                        [x, y, index]
+                                    end
+                                rescue
+                                end
+                                log_entry[:highlight] << encode_overlay(highlight_indices, @width, @height)
+                            end
+
+                            @ansi_log << log_entry
                         end
                     else
                         frames << nil
@@ -1455,7 +1565,7 @@ class Runner
                 emoji_widths[bot[:emoji]] = vwidth(bot[:emoji])
             end
             Zlib::GzipWriter.open(path) do |f|
-                data = {:width => @terminal_width, :height => @terminal_height, :frames => @ansi_log, :emoji_widths => emoji_widths}
+                data = {:width => @terminal_width, :height => @terminal_height, :frames => @ansi_log, :emoji_widths => emoji_widths, :index_to_color => index_to_color}
                 f.write(data.to_json)
             end
             path = @ansi_log_path.sub('.json.gz', "-#{@seed.to_s(36)}-poster.json.gz")
