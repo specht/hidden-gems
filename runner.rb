@@ -1076,6 +1076,7 @@ class Runner
         index_to_color = ['#00000000']
 
         @events = []
+        @events << { :type => 'match_start', :bots => @bots.map { |b| { name: b[:name], emoji: b[:emoji], position: b[:position] } } }
         @protocol = @bots.map { |b| [] }
         if @announcer_enabled
             @chatlog << {emoji: ANNOUNCER_EMOJI, text: "Welcome to Hidden Gems!" }
@@ -1967,13 +1968,17 @@ if options[:rounds] == 1
 
             report[:rounds] = [round_entry]
 
-            # store events in first bot's report only although it affects both bots
-            report[:events] = events if i == 0
             all_reports << report
         end
 
         File.open(write_profile_json_path, 'w') do |f|
             f.write(all_reports.to_json)
+        end
+
+        events_path = write_profile_json_path.sub(/\.json\z/, "-events.json.gz")
+        FileUtils.mkdir_p(File.dirname(events_path))
+        Zlib::GzipWriter.open(events_path) do |gz|
+            gz.write({ events: [events] }.to_json)
         end
     end
 else
@@ -2012,6 +2017,7 @@ else
         end
         all_options << runner.options_hash()
         results, events = runner.run
+        all_events << events
         (0...bot_paths.size).each do |k|
             all_score[k] << results[k][:score]
             all_utilization[k] << results[k][:gem_utilization]
@@ -2020,7 +2026,6 @@ else
             all_disqualified_for[k] << results[k][:disqualified_for]
             all_response_time_stats[k] << results[k][:response_time_stats]
             all_stderr_logs[k] << results[k][:stderr_log]
-            all_events << events
         end
     end
     puts
@@ -2071,12 +2076,16 @@ else
             end
             d
         end
-        report[:events] = all_events.flatten(1) if i == 0
         all_reports << report
     end
     if write_profile_json_path
         File.open(write_profile_json_path, 'w') do |f|
             f.write(all_reports.to_json)
+        end
+        events_path = write_profile_json_path.sub(/\.json\z/, "-events.json.gz")
+        FileUtils.mkdir_p(File.dirname(events_path))
+        Zlib::GzipWriter.open(events_path) do |gz|
+            gz.write({ events: all_events }.to_json)
         end
     end
 end
