@@ -48,16 +48,28 @@ class PCG32
     rotr32(xorshifted, rot)
   end
 
+  def next_uint64
+    ((next_uint32 << 32) | next_uint32) & MASK64
+  end
+
   def next_float
     next_uint32.to_f / (1 << 32)
   end
 
   def randrange(n)
     raise ArgumentError, "n must be positive" if n <= 0
-    threshold = (1 << 32) % n
-    loop do
-      r = next_uint32
-      return r % n if r >= threshold
+    if n <= (1 << 32)
+      threshold = (1 << 32) % n
+      loop do
+        r = next_uint32
+        return r % n if r >= threshold
+      end
+    else
+      limit = ((1 << 64) / n) * n
+      loop do
+        r = next_uint64
+        return r % n if r < limit
+      end
     end
   end
 
