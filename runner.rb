@@ -1070,6 +1070,7 @@ class Runner
         color_to_index = {'#00000000' => 0}
         index_to_color = ['#00000000']
 
+        @events = []
         @protocol = @bots.map { |b| [] }
         if @announcer_enabled
             @chatlog << {emoji: ANNOUNCER_EMOJI, text: "Welcome to Hidden Gems!" }
@@ -1305,6 +1306,7 @@ class Runner
                                 if @bots[i][:disqualified_for].nil?
                                     @bots[i][:disqualified_for] = 'terminated_unexpectedly'
                                     @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} has terminated unexpectedly!" } if @announcer_enabled
+                                    @events << { tick: @tick, type: 'terminated_unexpectedly', bot: i }
                                 end
                             end
                         end
@@ -1347,6 +1349,7 @@ class Runner
                                 if @bots[i][:disqualified_for].nil?
                                     @bots[i][:disqualified_for] = 'terminated_unexpectedly'
                                     @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} has terminated unexpectedly!" } if @announcer_enabled
+                                    @events << { tick: @tick, type: 'terminated_unexpectedly', bot: i }
                                 end
                                 read_ios.delete(io)
                                 pending.delete(i)
@@ -1372,6 +1375,7 @@ class Runner
                                     elapsed = now_mono - start_mono[i]
                                     if @announcer_enabled
                                         @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} took too long to respond (#{(elapsed * 1000).to_i} ms) and has been terminated!" }
+                                        @events << { tick: @tick, type: 'hard_timeout', bot: i }
                                     end
                                 end
                                 io = @bots_io[i].stdout
@@ -1402,11 +1406,13 @@ class Runner
                         @bots[i][:overtime_used] += overtime if overtime > 0.0
                         if @announcer_enabled && overtime.to_f > 0.0
                             @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} exceeded soft limit by #{(overtime * 1e3).to_i} ms (total overtime: #{(@bots[i][:overtime_used] * 1e3).to_i} ms)" }
+                            @events << { tick: @tick, type: 'overtime', bot: i, overtime: overtime.to_f, total_overtime: @bots[i][:overtime_used].to_f }
                         end
                         if @bots[i][:overtime_used] > OVERTIME_BUDGET * @timeout_scale
                             if @bots[i][:disqualified_for].nil?
                                 @bots[i][:disqualified_for] = 'overtime_budget_exceeded'
                                 @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} has exceeded their overtime budget and is disqualified!" } if @announcer_enabled
+                                @events << { tick: @tick, type: 'overtime_budget_exceeded', bot: i }
                             end
                         end
 
@@ -1434,6 +1440,7 @@ class Runner
                                         end
                                     end
                                     @bots[i][:position] = [dx, dy] if target_occupied_by_bot.nil?
+                                    @events << { tick: @tick, type: 'bot_moved', bot: i, position: @bots[i][:position]  }
                                 end
                             end
                         elsif command == 'WAIT'
@@ -1459,6 +1466,17 @@ class Runner
                                     results[k][:ticks_to_first_capture] ||= @tick
                                     if @announcer_enabled
                                         @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{bot[:name]} scored a gem with #{gem[:ttl]} points!" }
+                                        event = { tick: @tick, type: 'gem_collected', bot: k, score: gem[:ttl], position: gem[:position] }
+                                        if @bots.size > 1
+                                            other_idx = 1 - k
+                                            if @bots[other_idx][:disqualified_for].nil?
+                                                event[:other_bot] = {
+                                                    index: other_idx,
+                                                    position: @bots[other_idx][:position]
+                                                }
+                                            end
+                                        end
+                                        @events << event
                                     end
                                 end
                                 break if collected_this_gem
@@ -1469,6 +1487,9 @@ class Runner
                         end
                         @gems.each.with_index do |gem, i|
                             gem[:ttl] -= 1
+                            if gem[:ttl] <= 0
+                                @events << { tick: @tick, type: 'gem_expired', position: gem[:position] }
+                            end
                         end
                         @gems.reject! do |gem|
                             gem[:ttl] <= 0
@@ -1479,6 +1500,7 @@ class Runner
                         if @gem_fel_index < @gem_fel.size
                             if @tick >= @gem_fel[@gem_fel_index][:tick]
                                 ttl_spawned += spawn_gem()
+                                @events << { tick: @tick, type: 'gem_spawned', position: @gems.last[:position], ttl: @gems.last[:ttl] }
                             end
                         end
                     end
@@ -1585,7 +1607,7 @@ class Runner
                 f.write(data.to_json)
             end
         end
-        results
+        return results, @events
     end
 end
 
@@ -1865,7 +1887,7 @@ if options[:check_determinism]
             runner.timeout_scale = 10.0
             runner.setup
             runner.add_bot(path, bot_args[i] || [])
-            results = runner.run
+            results, events = runner.run
             if checksum.nil?
                 checksum = results[0][:protocol_checksum]
             else
@@ -1891,7 +1913,7 @@ if options[:rounds] == 1
     runner.stage_key = stage_key if stage_key
     runner.setup
     bot_paths.each.with_index { |path, i| runner.add_bot(path, bot_args[i] || []) }
-    results = runner.run
+    results, events = runner.run
 
     if write_profile_json_path
         all_reports = []
@@ -1935,6 +1957,9 @@ if options[:rounds] == 1
             end
 
             report[:rounds] = [round_entry]
+
+            # store events in first bot's report only although it affects both bots
+            report[:events] = events if i == 0
             all_reports << report
         end
 
@@ -1954,6 +1979,7 @@ else
     all_response_time_stats = bot_paths.map { [] }
     all_stderr_logs = bot_paths.map { [] }
     all_options = []
+    all_events = []
 
     bot_data = []
 
@@ -1976,7 +2002,7 @@ else
             end
         end
         all_options << runner.options_hash()
-        results = runner.run
+        results, events = runner.run
         (0...bot_paths.size).each do |k|
             all_score[k] << results[k][:score]
             all_utilization[k] << results[k][:gem_utilization]
@@ -1985,6 +2011,7 @@ else
             all_disqualified_for[k] << results[k][:disqualified_for]
             all_response_time_stats[k] << results[k][:response_time_stats]
             all_stderr_logs[k] << results[k][:stderr_log]
+            all_events << events
         end
     end
     puts
@@ -2035,6 +2062,7 @@ else
             end
             d
         end
+        report[:events] = all_events.flatten(1) if i == 0
         all_reports << report
     end
     if write_profile_json_path
