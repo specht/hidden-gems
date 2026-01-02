@@ -93,7 +93,7 @@ class HgAnsiCliPlayer
             jump(0)
         when "end"
             jump(@frames.length - 1)
-        when "q", "Q"
+        when "q", "Q", "esc"
             @quit = true
         end
     end
