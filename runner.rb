@@ -177,6 +177,8 @@ class Runner
         @bots = []
         @bots_io = []
         @gems = []
+        @gems_spawned = 0
+        @gem_id_for_offset = {}
         @chatlog = []
         @stage_title = '(no stage)'
         @stage_key = '(no stage)'
@@ -935,6 +937,9 @@ class Runner
         gem[:level] = level
 
         @gems << gem
+        @gems_spawned += 1
+        gem[:id] = @gems_spawned - 1
+        @gem_id_for_offset[gem[:position_offset]] = gem[:id]
         return gem[:ttl]
     end
 
@@ -1467,14 +1472,11 @@ class Runner
                                     results[k][:ticks_to_first_capture] ||= @tick
                                     if @announcer_enabled
                                         @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{bot[:name]} scored a gem with #{gem[:ttl]} points!" }
-                                        event = { tick: @tick, type: 'gem_collected', bot: k, score: gem[:ttl], position: gem[:position] }
+                                        event = { tick: @tick, type: 'gem_collected', bot: k, delta: gem[:ttl], new_score: bot[:score], position: gem[:position], id: gem[:id] }
                                         if @bots.size > 1
                                             other_idx = 1 - k
                                             if @bots[other_idx][:disqualified_for].nil?
-                                                event[:other_bot] = {
-                                                    index: other_idx,
-                                                    position: @bots[other_idx][:position]
-                                                }
+                                                event[:other_bot] = @bots[other_idx][:position]
                                             end
                                         end
                                         @events << event
@@ -1484,12 +1486,18 @@ class Runner
                             end
                         end
                         collected_gems.reverse.each do |i|
+                            @gem_id_for_offset.delete(@gems[i][:position_offset])
                             @gems.delete_at(i)
                         end
                         @gems.each.with_index do |gem, i|
                             gem[:ttl] -= 1
                             if gem[:ttl] <= 0
-                                @events << { tick: @tick, type: 'gem_expired', position: gem[:position] }
+                                @events << { tick: @tick, type: 'gem_expired', position: gem[:position], id: gem[:id] }
+                            end
+                        end
+                        @gems.each do |gem|
+                            if gem[:ttl] <= 0
+                                @gem_id_for_offset.delete(gem[:position_offset])
                             end
                         end
                         @gems.reject! do |gem|
@@ -1501,7 +1509,7 @@ class Runner
                         if @gem_fel_index < @gem_fel.size
                             if @tick >= @gem_fel[@gem_fel_index][:tick]
                                 ttl_spawned += spawn_gem()
-                                @events << { tick: @tick, type: 'gem_spawned', position: @gems.last[:position], ttl: @gems.last[:ttl] }
+                                @events << { tick: @tick, type: 'gem_spawned', position: @gems.last[:position], ttl: @gems.last[:ttl], gem_id: @gems.last[:id] }
                             end
                         end
                     end
