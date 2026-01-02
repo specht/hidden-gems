@@ -87,7 +87,7 @@ RUN groupadd -g ${GROUP_ID} runner && useradd -m -u ${USER_ID} -g ${GROUP_ID} -s
 WORKDIR /app
 RUN chown -R runner:runner /app
 RUN chown -R runner:runner /usr/local/julia
-RUN python3 -m pip install --break-system-packages numpy networkx
+RUN python3 -m pip install --break-system-packages numpy networkx sortedcontainers
 
 # Install zig 0.15.2
 ARG ZIG_VERSION=0.15.2
