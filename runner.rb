@@ -743,16 +743,18 @@ class Runner
                         cache_key_2 = "#{@fog_of_war_cache[cache_key_0]}/#{@fog_of_war_cache[cache_key_1]}/#{(@bg_fade[offset] * 64).round}"
                         @fog_of_war_cache[cache_key_2] ||= mix_rgb_hex(@fog_of_war_cache[cache_key_0], @fog_of_war_cache[cache_key_1], @bg_fade[offset])
                         bg = @fog_of_war_cache[cache_key_2]
-                        if bot_highlights.include?(offset)
-                            bot_highlights[offset].each do |color|
-                                opacity = 32
-                                if color.size == 9
-                                    opacity = (color[7..8].to_i(16) * 63) / 255
-                                    color = color[0..6]
+                        if @ansi_log_path.nil?
+                            if bot_highlights.include?(offset)
+                                bot_highlights[offset].each do |color|
+                                    opacity = 32
+                                    if color.size == 9
+                                        opacity = (color[7..8].to_i(16) * 63) / 255
+                                        color = color[0..6]
+                                    end
+                                    cache_key_3 = "#{bg}/#{color}/#{opacity}"
+                                    @fog_of_war_cache[cache_key_3] ||= mix_rgb_hex(bg, color, opacity / 63.0)
+                                    bg = @fog_of_war_cache[cache_key_3]
                                 end
-                                cache_key_3 = "#{bg}/#{color}/#{opacity}"
-                                @fog_of_war_cache[cache_key_3] ||= mix_rgb_hex(bg, color, opacity / 63.0)
-                                bg = @fog_of_war_cache[cache_key_3]
                             end
                         end
                         io.print Paint[c, nil, bg]
