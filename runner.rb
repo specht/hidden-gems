@@ -645,10 +645,11 @@ class Runner
             @bg_fade ||= {}
             @bg_highlight ||= {}
 
-            bot_highlights = {}
+            bot_highlights = []
 
             if @enable_debug
                 @bots.each.with_index do |x, i|
+                    bot_highlights[i] = {}
                     debug_json = ((@protocol[i][-2] || {})[:bots] || {})[:debug_json]
                     if debug_json
                         data = nil
@@ -663,8 +664,8 @@ class Runner
                                 y = _[1]
                                 offset = (y << 16) | x
                                 color = _[2]
-                                bot_highlights[offset] ||= []
-                                bot_highlights[offset] << color
+                                bot_highlights[i][offset] ||= []
+                                bot_highlights[i][offset] << color
                             end
                         end
                     end
@@ -743,9 +744,13 @@ class Runner
                         cache_key_2 = "#{@fog_of_war_cache[cache_key_0]}/#{@fog_of_war_cache[cache_key_1]}/#{(@bg_fade[offset] * 64).round}"
                         @fog_of_war_cache[cache_key_2] ||= mix_rgb_hex(@fog_of_war_cache[cache_key_0], @fog_of_war_cache[cache_key_1], @bg_fade[offset])
                         bg = @fog_of_war_cache[cache_key_2]
-                        if @ansi_log_path.nil?
-                            if bot_highlights.include?(offset)
-                                bot_highlights[offset].each do |color|
+                        old_bg = bg
+                        (0...@bots.size).each do |_k|
+                            if @ansi_log_path && @bots.size == 2
+                                bg = old_bg
+                            end
+                            if bot_highlights[_k].include?(offset)
+                                bot_highlights[_k][offset].each do |color|
                                     opacity = 32
                                     if color.size == 9
                                         opacity = (color[7..8].to_i(16) * 63) / 255
@@ -755,7 +760,14 @@ class Runner
                                     @fog_of_war_cache[cache_key_3] ||= mix_rgb_hex(bg, color, opacity / 63.0)
                                     bg = @fog_of_war_cache[cache_key_3]
                                 end
+                                if @ansi_log_path && @bots.size == 2
+                                    ((@protocol[_k][-2] || {})[:bots] || {})[:highlight] ||= []
+                                    ((@protocol[_k][-2] || {})[:bots] || {})[:highlight] << [x, y, bg]
+                                end
                             end
+                        end
+                        if @ansi_log_path && @bots.size == 2
+                            bg = old_bg
                         end
                         io.print Paint[c, nil, bg]
                     end
@@ -1032,7 +1044,7 @@ class Runner
             { type: :rle, bytes: rl_bytes, data: rl }
         end
     end
-    
+
     def run
         trap("INT") do
             @bots_io.each { |b| b.stdin.close rescue nil }
@@ -1169,12 +1181,10 @@ class Runner
                             log_entry = {:screen => screen}
                             log_entry[:highlight] = []
                             @bots.each.with_index do |bot, i|
-                                debug_json = ((@protocol[i][-2] || {})[:bots] || {})[:debug_json]
-                                debug_obj = nil
+                                stream = ((@protocol[i][-2] || {})[:bots] || {})[:highlight] || []
                                 highlight_indices = []
                                 begin
-                                    debug_obj = JSON.parse(debug_json) if debug_json
-                                    highlight_indices = debug_obj['highlight'].map do |entry|
+                                    highlight_indices = stream.map do |entry|
                                         x = entry[0]
                                         y = entry[1]
                                         color = entry[2].downcase
@@ -1185,7 +1195,6 @@ class Runner
                                         index = color_to_index[color]
                                         [x, y, index]
                                     end
-                                rescue
                                 end
                                 log_entry[:highlight] << encode_overlay(highlight_indices, @width, @height)
                             end
