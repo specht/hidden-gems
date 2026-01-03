@@ -751,7 +751,7 @@ class Runner
                             if @ansi_log_path && @bots.size == 2
                                 bg = old_bg
                             end
-                            if bot_highlights[_k].include?(offset)
+                            if (bot_highlights[_k] || {}).include?(offset)
                                 bot_highlights[_k][offset].each do |color|
                                     opacity = 32
                                     if color.size == 9
