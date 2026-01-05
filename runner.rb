@@ -146,8 +146,9 @@ class Runner
                    cache:, profile:, check_determinism:, use_docker:,
                    docker_workdirs:, rounds:, round_seeds:, verbose:,
                    max_tps:, announcer_enabled:, bot_chatter:,
-                   ansi_log_path:, show_timings:, start_paused:,
-                   highlight_color:, enable_debug:, timeout_scale:
+                   ansi_log_path:, write_highlights:, write_stdin:,
+                   show_timings:, start_paused:, highlight_color:,
+                   enable_debug:, timeout_scale:
                    )
         @seed = seed
         @width = width
@@ -185,6 +186,8 @@ class Runner
         @announcer_enabled = announcer_enabled
         @bot_chatter = bot_chatter
         @ansi_log_path = ansi_log_path
+        @write_highlights = write_highlights
+        @write_stdin = write_stdin
         @ansi_log = []
         @show_timings = show_timings
         @start_paused = start_paused
@@ -748,7 +751,7 @@ class Runner
                         bg = @fog_of_war_cache[cache_key_2]
                         old_bg = bg
                         (0...@bots.size).each do |_k|
-                            if @ansi_log_path && @bots.size == 2
+                            if @ansi_log_path && @write_highlights
                                 bg = old_bg
                             end
                             if (bot_highlights[_k] || {}).include?(offset)
@@ -762,13 +765,13 @@ class Runner
                                     @fog_of_war_cache[cache_key_3] ||= mix_rgb_hex(bg, color, opacity / 63.0)
                                     bg = @fog_of_war_cache[cache_key_3]
                                 end
-                                if @ansi_log_path && @bots.size == 2
+                                if @ansi_log_path && @write_highlights
                                     ((@protocol[_k][-2] || {})[:bots] || {})[:highlight] ||= []
                                     ((@protocol[_k][-2] || {})[:bots] || {})[:highlight] << [x, y, bg]
                                 end
                             end
                         end
-                        if @ansi_log_path && @bots.size == 2
+                        if @ansi_log_path && @write_highlights
                             bg = old_bg
                         end
                         io.print Paint[c, nil, bg]
@@ -1186,26 +1189,27 @@ class Runner
                         frames << screen
                         if @ansi_log_path
                             log_entry = {:screen => screen}
-                            log_entry[:highlight] = []
-                            @bots.each.with_index do |bot, i|
-                                stream = ((@protocol[i][-2] || {})[:bots] || {})[:highlight] || []
-                                highlight_indices = []
-                                begin
-                                    highlight_indices = stream.map do |entry|
-                                        x = entry[0]
-                                        y = entry[1]
-                                        color = entry[2].downcase
-                                        unless index_to_color.include?(color)
-                                            color_to_index[color] = index_to_color.size
-                                            index_to_color << color
+                            if @write_highlights
+                                log_entry[:highlight] = []
+                                @bots.each.with_index do |bot, i|
+                                    stream = ((@protocol[i][-2] || {})[:bots] || {})[:highlight] || []
+                                    highlight_indices = []
+                                    begin
+                                        highlight_indices = stream.map do |entry|
+                                            x = entry[0]
+                                            y = entry[1]
+                                            color = entry[2].downcase
+                                            unless index_to_color.include?(color)
+                                                color_to_index[color] = index_to_color.size
+                                                index_to_color << color
+                                            end
+                                            index = color_to_index[color]
+                                            [x, y, index]
                                         end
-                                        index = color_to_index[color]
-                                        [x, y, index]
                                     end
+                                    log_entry[:highlight] << encode_overlay(highlight_indices, @width, @height)
                                 end
-                                log_entry[:highlight] << encode_overlay(highlight_indices, @width, @height)
                             end
-
                             @ansi_log << log_entry
                         end
                     else
@@ -1288,7 +1292,7 @@ class Runner
                         @protocol[i] ||= []
                         @protocol[i].last[:bots] ||= {}
                         @protocol[i].last[:bots][:data] = data
-                        if @ansi_log_path && i == 0
+                        if @ansi_log_path && @write_stdin
                             @ansi_log.last[:stdin] = data
                         end
                     end
@@ -1608,7 +1612,10 @@ class Runner
                 emoji_widths[bot[:emoji]] = vwidth(bot[:emoji])
             end
             Zlib::GzipWriter.open(path) do |f|
-                data = {:width => @terminal_width, :height => @terminal_height, :frames => @ansi_log, :emoji_widths => emoji_widths, :index_to_color => index_to_color}
+                data = {:width => @terminal_width, :height => @terminal_height, :frames => @ansi_log, :emoji_widths => emoji_widths}
+                if @write_highlights
+                    data[:index_to_color] = index_to_color
+                end
                 f.write(data.to_json)
             end
             path = @ansi_log_path.sub('.json.gz', "-#{@seed.to_s(36)}-poster.json.gz")
@@ -1653,6 +1660,8 @@ options = {
     announcer_enabled: true,
     bot_chatter: true,
     ansi_log_path: nil,
+    write_highlights: false,
+    write_stdin: false,
     show_timings: false,
     start_paused: false,
     highlight_color: '#ffffff',
@@ -1807,6 +1816,12 @@ OptionParser.new do |opts|
     end
     opts.on("--ansi-log-path PATH", "Write ANSI and stdin log to JSON file (ends in .json.gz)") do |x|
         options[:ansi_log_path] = x
+    end
+    opts.on("--[no-]write-highlights", "Write highlight overlays to ANSI log (default: #{options[:write_highlights]})") do |x|
+        options[:write_highlights] = x
+    end
+    opts.on("--[no-]write-stdin", "Write bot stdin data to ANSI log (default: #{options[:write_stdin]})") do |x|
+        options[:write_stdin] = x
     end
     opts.on("--[no-]show-timings", "Show timings after run (default: #{options[:show_timings]})") do |x|
         options[:show_timings] = x
