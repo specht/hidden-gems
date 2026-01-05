@@ -29,7 +29,7 @@ require 'zlib'
 
 SOFT_LIMIT            = 0.100
 HARD_LIMIT            = 0.200
-HARD_LIMIT_FIRST_TICK = 20.0
+HARD_LIMIT_FIRST_TICK = 30.0
 OVERTIME_BUDGET       = 1.5
 
 OPTIONS_FOR_BOT = %w(stage_key width height generator max_ticks emit_signals vis_radius max_gems
