@@ -352,7 +352,7 @@ class Runner
             @tile_width = 2
 
             if @ansi_log_path
-                @terminal_width = 100
+                @terminal_width = 150
                 @terminal_height = @height + 2
             end
 
@@ -868,76 +868,80 @@ class Runner
         dist_field[(gem[:position][1] << 16) | gem[:position][0]] = 0
         distance = 0
         good = false
-        while (occupied_points.include?(gem[:position_offset])) && (!wavefront.empty?)
-            new_wavefront = Set.new()
-            wavefront.each do |p|
-                px = p[0]
-                py = p[1]
-                candidates = [[-1, 0], [1, 0], [0, -1], [0, 1]]
-                @rng.shuffle!(candidates)
-                candidates.each do |d|
-                    dx = px + d[0]
-                    dy = py + d[1]
-                    if dx >= 0 && dy >= 0 && dx < @width && dy < @height
-                        offset = (dy << 16) | dx
-                        if !dist_field.include?(offset) && !@maze.include?(offset)
-                            dist_field[offset] = distance
-                            new_wavefront << [dx, dy]
-                            unless occupied_points.include?(offset)
-                                gem[:position_offset] = offset
-                                gem[:position] = [dx, dy]
-                                good = true
-                                break
+        $timings.profile("spawn gem: find free tile") do
+            while (occupied_points.include?(gem[:position_offset])) && (!wavefront.empty?)
+                new_wavefront = Set.new()
+                wavefront.each do |p|
+                    px = p[0]
+                    py = p[1]
+                    candidates = [[-1, 0], [1, 0], [0, -1], [0, 1]]
+                    @rng.shuffle!(candidates)
+                    candidates.each do |d|
+                        dx = px + d[0]
+                        dy = py + d[1]
+                        if dx >= 0 && dy >= 0 && dx < @width && dy < @height
+                            offset = (dy << 16) | dx
+                            if !dist_field.include?(offset) && !@maze.include?(offset)
+                                dist_field[offset] = distance
+                                new_wavefront << [dx, dy]
+                                unless occupied_points.include?(offset)
+                                    gem[:position_offset] = offset
+                                    gem[:position] = [dx, dy]
+                                    good = true
+                                    break
+                                end
                             end
                         end
+                        break if good
                     end
                     break if good
                 end
                 break if good
+                wavefront = new_wavefront
+                distance += 1
             end
-            break if good
-            wavefront = new_wavefront
-            distance += 1
         end
 
-        # pre-calculate gem level
-        level = {}
-        seen = {}
-        wavefront = Set.new()
-        gx = gem[:position][0]
-        gy = gem[:position][1]
-        wavefront << [gx, gy]
-        while !wavefront.empty?
-            new_wavefront = Set.new()
-            wavefront.each do |p|
-                px = p[0]
-                py = p[1]
-                [[-1, 0], [1, 0], [0, -1], [0, 1]].each do |d|
-                    dx = px + d[0]
-                    dy = py + d[1]
-                    if dx >= 0 && dy >= 0 && dx < @width && dy < @height
-                        offset = (dy << 16) | dx
-                        if !seen.include?(offset)
-                            dist = Math.sqrt((dx - gx) * (dx - gx) + (dy - gy) * (dy - gy))
-                            r = @signal_radius.to_f
-                            l = 1.0 / (1.0 + (dist / r) * (dist / r))
-                            if @signal_quantization > 0
-                                q = @signal_quantization.to_f
-                                l = ((l * q).floor).to_f / q
+        $timings.profile("spawn gem: precalculate signal level") do
+            # pre-calculate gem level
+            level = {}
+            seen = {}
+            wavefront = Set.new()
+            gx = gem[:position][0]
+            gy = gem[:position][1]
+            wavefront << [gx, gy]
+            while !wavefront.empty?
+                new_wavefront = Set.new()
+                wavefront.each do |p|
+                    px = p[0]
+                    py = p[1]
+                    [[-1, 0], [1, 0], [0, -1], [0, 1]].each do |d|
+                        dx = px + d[0]
+                        dy = py + d[1]
+                        if dx >= 0 && dy >= 0 && dx < @width && dy < @height
+                            offset = (dy << 16) | dx
+                            if !seen.include?(offset)
+                                dist = Math.sqrt((dx - gx) * (dx - gx) + (dy - gy) * (dy - gy))
+                                r = @signal_radius.to_f
+                                l = 1.0 / (1.0 + (dist / r) * (dist / r))
+                                if @signal_quantization > 0
+                                    q = @signal_quantization.to_f
+                                    l = ((l * q).floor).to_f / q
+                                end
+                                l = 0.0 if l < @signal_cutoff.to_f
+                                unless @maze.include?(offset)
+                                    level[offset] = l
+                                end
+                                seen[offset] = true
+                                new_wavefront << [dx, dy]
                             end
-                            l = 0.0 if l < @signal_cutoff.to_f
-                            unless @maze.include?(offset)
-                                level[offset] = l
-                            end
-                            seen[offset] = true
-                            new_wavefront << [dx, dy]
                         end
                     end
                 end
+                wavefront = new_wavefront
             end
-            wavefront = new_wavefront
+            gem[:level] = level
         end
-        gem[:level] = level
 
         @gems << gem
         @gems_spawned += 1
@@ -1333,132 +1337,136 @@ class Runner
                     end
 
                     responses = {} # i => line (String)
-                    loop do
-                        break if read_ios.empty?
+                    $timings.profile("read responses") do
+                        loop do
+                            break if read_ios.empty?
 
-                        # compute shortest remaining deadline for select timeout
-                        now_mono = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-                        min_remaining = pending.map { |i| [deadline_mono[i] - now_mono, 0.0].max }.min
-                        # if any already timed out, skip waiting
-                        min_remaining = 0.0 if pending.any? { |i| now_mono >= deadline_mono[i] }
+                            # compute shortest remaining deadline for select timeout
+                            now_mono = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+                            min_remaining = pending.map { |i| [deadline_mono[i] - now_mono, 0.0].max }.min
+                            # if any already timed out, skip waiting
+                            min_remaining = 0.0 if pending.any? { |i| now_mono >= deadline_mono[i] }
 
-                        ready, = IO.select(read_ios, nil, nil, min_remaining)
-                        ready ||= []
+                            ready, = IO.select(read_ios, nil, nil, min_remaining)
+                            ready ||= []
 
-                        # Always drain any ready stdout first; otherwise a bot can be falsely hard-timed-out
-                        # simply because the runner was busy with other bots.
-                        ready.each do |io|
-                            i = stdout_map[io]
-                            next unless pending.include?(i)
-                            chunk = io.read_nonblock(4096, exception: false)
-                            case chunk
-                            when :wait_readable
-                                # no data yet
-                            when nil
-                                # EOF
-                                if @bots[i][:disqualified_for].nil?
-                                    @bots[i][:disqualified_for] = 'terminated_unexpectedly'
-                                    @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} has terminated unexpectedly!" } if @announcer_enabled
-                                    @events << { tick: @tick, type: 'terminated_unexpectedly', bot: i }
+                            # Always drain any ready stdout first; otherwise a bot can be falsely hard-timed-out
+                            # simply because the runner was busy with other bots.
+                            ready.each do |io|
+                                i = stdout_map[io]
+                                next unless pending.include?(i)
+                                chunk = io.read_nonblock(4096, exception: false)
+                                case chunk
+                                when :wait_readable
+                                    # no data yet
+                                when nil
+                                    # EOF
+                                    if @bots[i][:disqualified_for].nil?
+                                        @bots[i][:disqualified_for] = 'terminated_unexpectedly'
+                                        @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} has terminated unexpectedly!" } if @announcer_enabled
+                                        @events << { tick: @tick, type: 'terminated_unexpectedly', bot: i }
+                                    end
+                                    read_ios.delete(io)
+                                    pending.delete(i)
+                                else
+                                    @stdout_buffers[i] << chunk
+                                    # extract one line if present (keep remainder for next tick)
+                                    if (nl = @stdout_buffers[i].index("\n"))
+                                        line = @stdout_buffers[i].slice!(0..nl).strip
+                                        responses[i] = line
+                                        received_mono[i] = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+                                        read_ios.delete(io)
+                                        pending.delete(i)
+                                    end
                                 end
-                                read_ios.delete(io)
-                                pending.delete(i)
-                            else
-                                @stdout_buffers[i] << chunk
-                                # extract one line if present (keep remainder for next tick)
-                                if (nl = @stdout_buffers[i].index("\n"))
-                                    line = @stdout_buffers[i].slice!(0..nl).strip
-                                    responses[i] = line
-                                    received_mono[i] = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+                            end
+
+                            # Now mark hard timeouts for bots still pending without a full line.
+                            now_mono = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+                            pending.dup.each do |i|
+                                if now_mono >= deadline_mono[i] && !responses.key?(i)
+                                    if @bots[i][:disqualified_for].nil?
+                                        @bots[i][:disqualified_for] = "hard_timeout"
+                                        elapsed = now_mono - start_mono[i]
+                                        if @announcer_enabled
+                                            @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} took too long to respond (#{(elapsed * 1000).to_i} ms) and has been terminated!" }
+                                            @events << { tick: @tick, type: 'hard_timeout', bot: i }
+                                        end
+                                    end
+                                    io = @bots_io[i].stdout
                                     read_ios.delete(io)
                                     pending.delete(i)
                                 end
                             end
                         end
-
-                        # Now mark hard timeouts for bots still pending without a full line.
-                        now_mono = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-                        pending.dup.each do |i|
-                            if now_mono >= deadline_mono[i] && !responses.key?(i)
-                                if @bots[i][:disqualified_for].nil?
-                                    @bots[i][:disqualified_for] = "hard_timeout"
-                                    elapsed = now_mono - start_mono[i]
-                                    if @announcer_enabled
-                                        @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} took too long to respond (#{(elapsed * 1000).to_i} ms) and has been terminated!" }
-                                        @events << { tick: @tick, type: 'hard_timeout', bot: i }
-                                    end
-                                end
-                                io = @bots_io[i].stdout
-                                read_ios.delete(io)
-                                pending.delete(i)
-                            end
-                        end
                     end
 
                     # 3d) PROCESS RESPONSES in initiative order
-                    (0...@bots.size).each do |_k|
-                        i = (_k + bot_with_initiative) % @bots.size
-                        next if prepared[i].nil?
-                        next if @bots[i][:disqualified_for]
+                    $timings.profile("process bot responses") do
+                        (0...@bots.size).each do |_k|
+                            i = (_k + bot_with_initiative) % @bots.size
+                            next if prepared[i].nil?
+                            next if @bots[i][:disqualified_for]
 
-                        line = responses[i]
-                        if line.nil?
-                            # already disqualified above (timeout/EOF)
-                            next
-                        end
-
-                        # Use the moment we actually received this bot's newline-terminated response.
-                        # Otherwise a slow opponent inflates everyone's "elapsed" (and overtime).
-                        recv_t = received_mono[i] || Process.clock_gettime(Process::CLOCK_MONOTONIC)
-                        elapsed = recv_t - start_mono[i]
-                        @bots[i][:response_times] << elapsed
-                        overtime = (@tick == 0 || @check_determinism) ? 0.0 : (elapsed - SOFT_LIMIT * @timeout_scale)
-                        @bots[i][:overtime_used] += overtime if overtime > 0.0
-                        if @announcer_enabled && overtime.to_f > 0.0
-                            @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} exceeded soft limit by #{(overtime * 1e3).to_i} ms (total overtime: #{(@bots[i][:overtime_used] * 1e3).to_i} ms)" }
-                            @events << { tick: @tick, type: 'overtime', bot: i, overtime: overtime.to_f, total_overtime: @bots[i][:overtime_used].to_f }
-                        end
-                        if @bots[i][:overtime_used] > OVERTIME_BUDGET * @timeout_scale
-                            if @bots[i][:disqualified_for].nil?
-                                @bots[i][:disqualified_for] = 'overtime_budget_exceeded'
-                                @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} has exceeded their overtime budget and is disqualified!" } if @announcer_enabled
-                                @events << { tick: @tick, type: 'overtime_budget_exceeded', bot: i }
+                            line = responses[i]
+                            if line.nil?
+                                # already disqualified above (timeout/EOF)
+                                next
                             end
-                        end
 
-                        command = (line.split(' ').first || '').strip
-                        debug_json = line[command.length..-1]&.strip
-                        @protocol[i].last[:bots][:response] = command
-                        unless @check_determinism
-                            @protocol[i].last[:bots][:debug_json] = debug_json
-                        end
-
-                        bot_position = @bots[i][:position]
-                        prev_bot_position = bot_position.dup
-                        if ['N','E','S','W'].include?(command)
-                            dir = {'N'=>[0,-1],'E'=>[1,0],'S'=>[0,1],'W'=>[-1,0]}
-                            dx = bot_position[0] + dir[command][0]
-                            dy = bot_position[1] + dir[command][1]
-                            if dx >= 0 && dy >= 0 && dx < @width && dy < @height
-                                unless @maze.include?((dy << 16) | dx)
-                                    target_occupied_by_bot = nil
-                                    (0...@bots.size).each do |other|
-                                        next if other == i
-                                        next if @bots[other][:disqualified_for]
-                                        if @bots[other][:position] == [dx, dy]
-                                            target_occupied_by_bot = other
-                                            break
-                                        end
-                                    end
-                                    @bots[i][:position] = [dx, dy] if target_occupied_by_bot.nil?
+                            # Use the moment we actually received this bot's newline-terminated response.
+                            # Otherwise a slow opponent inflates everyone's "elapsed" (and overtime).
+                            recv_t = received_mono[i] || Process.clock_gettime(Process::CLOCK_MONOTONIC)
+                            elapsed = recv_t - start_mono[i]
+                            @bots[i][:response_times] << elapsed
+                            overtime = (@tick == 0 || @check_determinism) ? 0.0 : (elapsed - SOFT_LIMIT * @timeout_scale)
+                            @bots[i][:overtime_used] += overtime if overtime > 0.0
+                            if @announcer_enabled && overtime.to_f > 0.0
+                                @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} exceeded soft limit by #{(overtime * 1e3).to_i} ms (total overtime: #{(@bots[i][:overtime_used] * 1e3).to_i} ms)" }
+                                @events << { tick: @tick, type: 'overtime', bot: i, overtime: overtime.to_f, total_overtime: @bots[i][:overtime_used].to_f }
+                            end
+                            if @bots[i][:overtime_used] > OVERTIME_BUDGET * @timeout_scale
+                                if @bots[i][:disqualified_for].nil?
+                                    @bots[i][:disqualified_for] = 'overtime_budget_exceeded'
+                                    @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} has exceeded their overtime budget and is disqualified!" } if @announcer_enabled
+                                    @events << { tick: @tick, type: 'overtime_budget_exceeded', bot: i }
                                 end
                             end
-                        elsif command == 'WAIT'
-                            # no-op
-                        else
-                            # invalid command -> ignore
+
+                            command = (line.split(' ').first || '').strip
+                            debug_json = line[command.length..-1]&.strip
+                            @protocol[i].last[:bots][:response] = command
+                            unless @check_determinism
+                                @protocol[i].last[:bots][:debug_json] = debug_json
+                            end
+
+                            bot_position = @bots[i][:position]
+                            prev_bot_position = bot_position.dup
+                            if ['N','E','S','W'].include?(command)
+                                dir = {'N'=>[0,-1],'E'=>[1,0],'S'=>[0,1],'W'=>[-1,0]}
+                                dx = bot_position[0] + dir[command][0]
+                                dy = bot_position[1] + dir[command][1]
+                                if dx >= 0 && dy >= 0 && dx < @width && dy < @height
+                                    unless @maze.include?((dy << 16) | dx)
+                                        target_occupied_by_bot = nil
+                                        (0...@bots.size).each do |other|
+                                            next if other == i
+                                            next if @bots[other][:disqualified_for]
+                                            if @bots[other][:position] == [dx, dy]
+                                                target_occupied_by_bot = other
+                                                break
+                                            end
+                                        end
+                                        @bots[i][:position] = [dx, dy] if target_occupied_by_bot.nil?
+                                    end
+                                end
+                            elsif command == 'WAIT'
+                                # no-op
+                            else
+                                # invalid command -> ignore
+                            end
+                            @events << { tick: @tick, type: 'bot_moved', bot: i, from: prev_bot_position, to: @bots[i][:position], command: command[0, 16] }
                         end
-                        @events << { tick: @tick, type: 'bot_moved', bot: i, from: prev_bot_position, to: @bots[i][:position], command: command[0, 16] }
                     end
 
                     # STEP 4: COLLECT GEMS & DECAY GEMS
