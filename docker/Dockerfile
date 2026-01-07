@@ -1,4 +1,4 @@
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 LC_ALL=C.UTF-8 TZ=Europe/Berlin \
@@ -34,13 +34,9 @@ RUN set -eux; \
     rm /tmp/go.tgz
 
 # Install PowerShell
-RUN apt-get update && apt-get install -y wget apt-transport-https software-properties-common gnupg \
-    && wget -q https://packages.microsoft.com/keys/microsoft.asc -O- | gpg --dearmor -o /usr/share/keyrings/microsoft.gpg \
-    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/microsoft.gpg] \
-       https://packages.microsoft.com/debian/12/prod bookworm main" > /etc/apt/sources.list.d/microsoft.list \
-    && apt-get update \
-    && apt-get install -y powershell \
-    && rm -rf /var/lib/apt/lists/*
+RUN wget https://packages.microsoft.com/config/debian/13/packages-microsoft-prod.deb -O packages-microsoft-prod.deb \
+    && dpkg -i packages-microsoft-prod.deb \
+    && rm packages-microsoft-prod.deb
 
 # Install Dart
 RUN wget https://storage.googleapis.com/dart-archive/channels/stable/release/3.8.2/linux_packages/dart_3.8.2-1_amd64.deb \
