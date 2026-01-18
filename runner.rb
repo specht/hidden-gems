@@ -147,8 +147,8 @@ class Runner
                    docker_workdirs:, rounds:, round_seeds:, verbose:,
                    max_tps:, announcer_enabled:, bot_chatter:,
                    ansi_log_path:, write_highlights:, write_stdin:,
-                   show_timings:, start_paused:, highlight_color:,
-                   enable_debug:, timeout_scale:
+                   show_timings:, start_paused:, contest_mode:,
+                   highlight_color:, enable_debug:, timeout_scale:
                    )
         @seed = seed
         @width = width
@@ -190,7 +190,10 @@ class Runner
         @write_stdin = write_stdin
         @ansi_log = []
         @show_timings = show_timings
+        @paused = false
+        @pause_requested = false
         @start_paused = start_paused
+        @contest_mode = contest_mode
         @highlight_color = highlight_color
         @enable_debug = enable_debug
         @timeout_scale = timeout_scale
@@ -1106,7 +1109,7 @@ class Runner
             end
         end
         frames = []
-        paused = @start_paused
+        @paused = @start_paused
         break_on_tick = nil
         begin
             print "\033[?25l" if @verbose >= 2
@@ -1185,7 +1188,7 @@ class Runner
                     if @verbose >= 2 || @ansi_log_path
                         screen = nil
                         $timings.profile("render screen") do
-                            screen = render(running_tick, signal_level, paused)
+                            screen = render(running_tick, signal_level, @paused)
                         end
                         # @protocol.last[:screen] = screen
                         if @verbose >= 2
@@ -1228,6 +1231,10 @@ class Runner
 
                     if @bots.all? { |b| b[:disqualified_for] }
                         break_on_tick = @tick + 1
+                    end
+                    if @pause_requested && !@paused
+                        @paused = true
+                        @pause_requested = false
                     end
 
                     bot_with_initiative = @tick % @bots.size
@@ -1437,8 +1444,18 @@ class Runner
                             command = (line.split(' ').first || '').strip
                             debug_json = line[command.length..-1]&.strip
                             @protocol[i].last[:bots][:response] = command
-                            unless @check_determinism
+                            if (!@check_determinism) && (!@contest_mode)
                                 @protocol[i].last[:bots][:debug_json] = debug_json
+                                if @verbose >= 2
+                                    begin
+                                        debug_data = JSON.parse(debug_json)
+                                        if debug_data['command'] == 'pause'
+                                            @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} requested a pause." }
+                                            @pause_requested = true
+                                        end
+                                    rescue
+                                    end
+                                end
                             end
 
                             bot_position = @bots[i][:position]
@@ -1531,7 +1548,7 @@ class Runner
                 if @verbose >= 2
                     print frames[@tick]
                 end
-                unless paused
+                unless @paused
                     @tick += 1
                     break if @tick > @max_ticks
                     if @verbose >= 2 && @max_tps > 0
@@ -1544,23 +1561,23 @@ class Runner
                 end
                 unless @verbose < 2 || @check_determinism
                     begin
-                        key = KeyInput.get_key(paused)
+                        key = KeyInput.get_key(@paused)
                         if key == 'q' || key == 'esc'
                             exit
                         elsif key == 'left'
                             @tick = [@tick - 1, 0].max
-                            paused = true
+                            @paused = true
                         elsif key == 'home'
                             @tick = 0
-                            paused = true
+                            @paused = true
                         # elsif key == 'end'
                         #     @tick = @max_ticks - 1
-                        #     paused = true
+                        #     @paused = true
                         elsif key == 'right'
                             @tick = [@tick + 1, @max_ticks].min
-                            paused = true
+                            @paused = true
                         elsif key == ' '
-                            paused = !paused
+                            @paused = !@paused
                         end
                     rescue
                     end
@@ -1673,6 +1690,7 @@ options = {
     write_stdin: false,
     show_timings: false,
     start_paused: false,
+    contest_mode: false,
     highlight_color: '#ffffff',
     enable_debug: true,
     timeout_scale: 1.0,
@@ -1837,6 +1855,9 @@ OptionParser.new do |opts|
     end
     opts.on("--[no-]start-paused", "Start the runner in paused mode (default: #{options[:start_paused]})") do |x|
         options[:start_paused] = x
+    end
+    opts.on("--[no-]contest-mode", "Enable contest mode (disables bot debugging, default: #{options[:contest_mode]})") do |x|
+        options[:contest_mode] = x
     end
     opts.on("--highlight-color COLOR", String, "Highlight color (default: #{options[:highlight_color]})") do |x|
         options[:highlight_color] = x
