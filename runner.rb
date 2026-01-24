@@ -357,6 +357,9 @@ class Runner
             if @ansi_log_path
                 stage_index = @stage_key.split('-')[1].to_i
                 @terminal_width = stage_index < 2 ? 100 : 150
+                if @width >= 50
+                    @terminal_width = @width * @tile_width + 20
+                end
                 @terminal_height = @height + 2
             end
 
