@@ -76,6 +76,23 @@ if Gem.win_platform?
     at_exit { flush_console_input_buffer }
 end
 
+def sanitize_utf8_values(obj, replacement: "�")
+    case obj
+    when String
+        return obj if obj.encoding == Encoding::UTF_8 && obj.valid_encoding?
+        obj.encode(Encoding::UTF_8, invalid: :replace, undef: :replace, replace: replacement)
+
+    when Array
+        obj.map { |v| sanitize_utf8_values(v, replacement: replacement) }
+
+    when Hash
+        obj.transform_values { |v| sanitize_utf8_values(v, replacement: replacement) }
+
+    else
+        obj
+    end
+end
+
 class Runner
 
     UI_BACKGROUND_TOP = '#1d5479'
@@ -2017,7 +2034,7 @@ if options[:rounds] == 1
         end
 
         File.open(write_profile_json_path, 'w') do |f|
-            f.write(all_reports.to_json)
+            f.write(sanitize_utf8_values(all_reports).to_json)
         end
 
         events_path = write_profile_json_path.sub(/\.json\z/, "-events.json.gz")
@@ -2130,7 +2147,7 @@ else
         events_path = write_profile_json_path.sub(/\.json\z/, "-events.json.gz")
         FileUtils.mkdir_p(File.dirname(events_path))
         Zlib::GzipWriter.open(events_path) do |gz|
-            gz.write({ events: all_events }.to_json)
+            gz.write({ events: sanitize_utf8_values(all_events) }.to_json)
         end
     end
 end
