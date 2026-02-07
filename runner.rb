@@ -219,7 +219,7 @@ class Runner
 
         param_rng = PCG32.new(@seed)
         [:width, :height, :max_ticks, :vis_radius, :gem_ttl, :max_gems,
-         :signal_radius, :rounds].each do |_key|
+         :signal_radius, :signal_fade, :rounds].each do |_key|
             key = "@#{_key}".to_sym
             value = instance_variable_get(key)
             if value.is_a?(String) && value.include?('..')
@@ -228,7 +228,7 @@ class Runner
                 instance_variable_set(key, new_value)
             end
         end
-        [:gem_spawn_rate].each do |_key|
+        [:gem_spawn_rate, :signal_noise].each do |_key|
             key = "@#{_key}".to_sym
             value = instance_variable_get(key)
             if value.is_a?(String) && value.include?('..')
@@ -1152,16 +1152,8 @@ class Runner
                     # STEP 1: Calculate signal levels at each tile
                     if @emit_signals
                         signal_level = @gems.map do |gem|
-                            temp = if @signal_noise > 0.0
-                                gem[:level].transform_values do |l|
-                                    l += (@rng.next_float() - 0.5) * 2.0 * @signal_noise
-                                    l = 0.0 if l < 0.0
-                                    l = 1.0 if l > 1.0
-                                    l
-                                end
-                            else
-                                gem[:level]
-                            end
+                            # fade first
+                            temp = gem[:level]
                             if @signal_fade > 0
                                 t = 1.0
                                 gem_age = @gem_ttl - gem[:ttl]
@@ -1174,6 +1166,15 @@ class Runner
                                 t = 1.0 if t > 1.0
                                 if t < 1.0
                                     temp = temp.transform_values { |x| x * t }
+                                end
+                            end
+                            # add noise after fading
+                            if @signal_noise > 0.0
+                                temp = temp.transform_values do |l|
+                                    l += (@rng.next_float() - 0.5) * 2.0 * @signal_noise
+                                    l = 0.0 if l < 0.0
+                                    l = 1.0 if l > 1.0
+                                    l
                                 end
                             end
                             temp
