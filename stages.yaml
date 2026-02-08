@@ -53,13 +53,14 @@ stage-3@0.1:
     title: Resonance
     from: '2026-02-09'
     generator: cellular
-    width: 29..39
-    height: 19
-    max_gems: 2..3
+    width: 39..49
+    height: 29
+    max_gems: 3..4
     emit_signals: true
+    emit_signal_channels: true
     signal_radius: 5..10
     vis_radius: 5..15
-    signal_noise: 0.01..0.05
-    signal_fade: 3..5
+    signal_noise: 0.01..0.025
+    signal_fade: 5..10
     gem_spawn_rate: 0.05
-    max_ticks: 1000
+    max_ticks: 1200
