@@ -40,7 +40,7 @@ OPTIONS_FOR_BOT = %w(stage_key width height generator max_ticks emit_signals
 ANSI = /\e\[[0-9;:<>?]*[@-~]/
 
 GAUGE = "⠀⡀⣀⣄⣤⣦⣶⣷⣿"
-GAUGE_COLORS = ['#ea2830', '#80bc42', '#55beed', '#fad31c']
+GAUGE_COLORS = ['#ea2830', '#80bc42', '#55beed', '#fad31c', '#f384ae', '#00a8a8', '#7b67ae']
 
 $timings = Timings.new
 

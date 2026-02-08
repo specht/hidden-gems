@@ -55,7 +55,7 @@ stage-3@0.1:
     generator: cellular
     width: 39..49
     height: 29
-    max_gems: 3..4
+    max_gems: 3..7
     emit_signals: true
     emit_signal_channels: true
     signal_radius: 5..10
