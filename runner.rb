@@ -2080,7 +2080,10 @@ if options[:rounds] == 1
             report[:timestamp] = Time.now.to_i
             report[:stage_key] = stage_key
             report[:stage_title] = stage_title
-            report[:git_hash] = `git describe --always --dirty`.strip
+            begin
+                report[:git_hash] = `git describe --always --dirty`.strip
+            rescue
+            end
             report[:seed] = og_seed.to_s(36)
             report[:name] = bot[:name]
             report[:emoji] = bot[:emoji]
@@ -2191,7 +2194,10 @@ else
         report[:timestamp] = Time.now.to_i
         report[:stage_key] = stage_key
         report[:stage_title] = stage_title
-        report[:git_hash] = `git describe --always --dirty`.strip
+        begin
+            report[:git_hash] = `git describe --always --dirty`
+        rescue
+        end
         report[:seed] = og_seed.to_s(36)
         report[:name] = data[:name]
         report[:emoji] = data[:emoji]
