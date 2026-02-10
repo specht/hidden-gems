@@ -695,10 +695,12 @@ class Runner
                             data['highlight'].each do |_|
                                 x = _[0]
                                 y = _[1]
-                                offset = (y << 16) | x
-                                color = _[2]
-                                bot_highlights[i][offset] ||= []
-                                bot_highlights[i][offset] << color
+                                if x >= 0 && x < @width && y >= 0 && y < @height
+                                    offset = (y << 16) | x
+                                    color = _[2]
+                                    bot_highlights[i][offset] ||= []
+                                    bot_highlights[i][offset] << color
+                                end
                             end
                         end
                     end
