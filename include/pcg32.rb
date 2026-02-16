@@ -73,6 +73,28 @@ class PCG32
     end
   end
 
+  def rand_normal(mean = 0.0, stddev = 1.0)
+    @normal_spare ||= nil
+
+    if @normal_spare
+      z = @normal_spare
+      @normal_spare = nil
+      return mean + stddev * z
+    end
+
+    u1 = 1.0 - next_float
+    u2 = next_float
+
+    r = Math.sqrt(-2.0 * Math.log(u1))
+    theta = 2.0 * Math::PI * u2
+
+    z0 = r * Math.cos(theta)
+    z1 = r * Math.sin(theta)
+
+    @normal_spare = z1
+    mean + stddev * z0
+  end
+
   def sample(arr)
     raise ArgumentError, "empty array" if arr.empty?
     arr[randrange(arr.length)]
