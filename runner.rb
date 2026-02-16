@@ -41,6 +41,7 @@ ANSI = /\e\[[0-9;:<>?]*[@-~]/
 
 GAUGE = "⠀⡀⣀⣄⣤⣦⣶⣷⣿"
 GAUGE_COLORS = ['#ea2830', '#80bc42', '#55beed', '#fad31c', '#f384ae', '#00a8a8', '#7b67ae']
+GEM_CHANNEL_COOLDOWN = 1
 
 $timings = Timings.new
 
@@ -203,7 +204,7 @@ class Runner
         @gems = []
         @gems_spawned = 0
         @gem_id_for_offset = {}
-        @gem_channel_for_gem_id = {}
+        @channel_blocked_until = []
         @chatlog = []
         @stage_title = '(no stage)'
         @stage_key = '(no stage)'
@@ -368,6 +369,11 @@ class Runner
             end
             # we're waiting to spawn the gem at @gem_fel_index
             @gem_fel_index = 0
+
+            @channel_blocked_until = []
+            (0...@max_gems).each do |c|
+                @channel_blocked_until[c] = 0
+            end
 
             begin
                 @terminal_height, @terminal_width = $stdout.winsize
@@ -861,23 +867,6 @@ class Runner
                     parts
                 end
                 status_line_parts << bot_line
-                # status_line_parts << [
-                #     Paint[@bots.map.with_index { |x, i| "#{x[:emoji]} #{((@protocol[i][-2] || {})[:bots] || {})[:response]}" }.join(' : '), UI_FOREGROUND_BOTTOM, UI_BACKGROUND_BOTTOM]
-                # ]
-                # if @emit_signal_channels
-                #     status_line_parts << [
-                #         Paint[@bots.map.with_index { |x, i| "#{x[:emoji]} #{((@protocol[i][-2] || {})[:bots] || {})[:response]}" }.join(' : '), UI_FOREGROUND_BOTTOM, UI_BACKGROUND_BOTTOM]
-                #         Paint['Signal: ', UI_FOREGROUND_BOTTOM, UI_BACKGROUND_BOTTOM],
-                #         Paint['⣦', '#ea2830', UI_BACKGROUND_BOTTOM],
-                #         Paint[' ', UI_FOREGROUND_BOTTOM, UI_BACKGROUND_BOTTOM],
-                #         Paint['⣀', '#80bc42', UI_BACKGROUND_BOTTOM],
-                #         Paint[' ', UI_FOREGROUND_BOTTOM, UI_BACKGROUND_BOTTOM],
-                #         Paint['⣷', '#55beed', UI_BACKGROUND_BOTTOM],
-                #         Paint[@bots.map.with_index { |x, i| "#{x[:emoji]} #{((@protocol[i][-2] || {})[:bots] || {})[:response]}" }.join(' : '), UI_FOREGROUND_BOTTOM, UI_BACKGROUND_BOTTOM]
-                #     ]
-                # else
-                # end
-                # glyph = ["⠀","⡀","⣀","⣄","⣤","⣦","⣶","⣷","⣿"][level]
                 status_line = status_line_parts.map { |x| x.join('') }.join(Paint['  |  ', fg_bottom_mix, UI_BACKGROUND_BOTTOM])
                 trimmed, vis = trim_ansi_to_width(status_line, @terminal_width)
                 status_line = trimmed + Paint[' ' * [@terminal_width - vis, 0].max, UI_FOREGROUND_BOTTOM, UI_BACKGROUND_BOTTOM]
@@ -914,7 +903,7 @@ class Runner
         end
     end
 
-    def spawn_gem()
+    def spawn_gem(channel)
         spawn_data = @gem_fel[@gem_fel_index]
         @gem_fel_index += 1
 
@@ -1016,14 +1005,8 @@ class Runner
         gem[:id] = @gems_spawned - 1
         @gem_id_for_offset[gem[:position_offset]] = gem[:id]
         if @emit_signal_channels
-            # find free channel
-            available_channels = Set.new((0...@max_gems).to_a)
-            @gems.each do |g|
-                channel = @gem_channel_for_gem_id[g[:id]]
-                available_channels.delete(channel) if channel
-            end
-            channel = @rng.sample(available_channels.to_a.sort)
-            @gem_channel_for_gem_id[gem[:id]] = channel
+            gem[:channel] = channel
+            @channel_blocked_until[channel] = @tick + spawn_data[:ttl] + GEM_CHANNEL_COOLDOWN
         end
         @gems << gem
         return gem[:ttl]
@@ -1369,8 +1352,7 @@ class Runner
                                 if @emit_signal_channels
                                     data[:channels] = (0...@max_gems).map { |c| 0.0 }
                                     @gems.each.with_index do |g, gi|
-                                        gem_id = g[:id]
-                                        channel = @gem_channel_for_gem_id[gem_id]
+                                        channel = g[:channel]
                                         level = signal_level[gi][vis_key] || 0.0
                                         data[:channels][channel] = format("%.6f", level).to_f
                                     end
@@ -1609,7 +1591,7 @@ class Runner
                         collected_gems.reverse.each do |i|
                             @gem_id_for_offset.delete(@gems[i][:position_offset])
                             if @emit_signal_channels
-                                @gem_channel_for_gem_id.delete(@gems[i][:id])
+                                @channel_blocked_until[@gems[i][:channel]] = @tick + GEM_CHANNEL_COOLDOWN
                             end
                             @gems.delete_at(i)
                         end
@@ -1623,7 +1605,7 @@ class Runner
                             if gem[:ttl] <= 0
                                 @gem_id_for_offset.delete(gem[:position_offset])
                                 if @emit_signal_channels
-                                    @gem_channel_for_gem_id.delete(gem[:id])
+                                    @channel_blocked_until[gem[:channel]] = @tick + GEM_CHANNEL_COOLDOWN
                                 end
                             end
                         end
@@ -1635,8 +1617,13 @@ class Runner
                     if @gems.size < @max_gems
                         if @gem_fel_index < @gem_fel.size
                             if @tick >= @gem_fel[@gem_fel_index][:tick]
-                                ttl_spawned += spawn_gem()
-                                @events << { tick: @tick, type: 'gem_spawned', position: @gems.last[:position], ttl: @gems.last[:ttl], id: @gems.last[:id] }
+                                can_spawn_channels = (0...@max_gems).select do |channel|
+                                    @tick >= @channel_blocked_until[channel]
+                                end
+                                unless can_spawn_channels.empty?
+                                    ttl_spawned += spawn_gem(@rng.sample(can_spawn_channels))
+                                    @events << { tick: @tick, type: 'gem_spawned', position: @gems.last[:position], ttl: @gems.last[:ttl], id: @gems.last[:id] }
+                                end
                             end
                         end
                     end
