@@ -64,3 +64,18 @@ stage-3@0.1:
     signal_fade: 5..10
     gem_spawn_rate: 0.05
     max_ticks: 1200
+stage-3@0.2:
+    title: Resonance
+    from: '2026-02-17'
+    generator: cellular
+    width: 39..49
+    height: 29
+    max_gems: 3..7
+    emit_signals: true
+    emit_signal_channels: true
+    signal_radius: 5..10
+    vis_radius: 3..7
+    signal_noise: 0.01..0.025
+    signal_fade: 5..10
+    gem_spawn_rate: 0.05
+    max_ticks: 1200

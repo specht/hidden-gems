@@ -1229,7 +1229,11 @@ class Runner
                             # add noise after fading
                             if @signal_noise > 0.0
                                 temp = temp.transform_values do |l|
-                                    l += (@rng.next_float() - 0.5) * 2.0 * @signal_noise
+                                    if @stage_key < 'stage-3@0.2'
+                                        l += (@rng.next_float() - 0.5) * 2.0 * @signal_noise
+                                    else
+                                        l += @rng.rand_normal(0, @signal_noise * 0.577350)
+                                    end
                                     # no clamping of raw noisy signals, we'll only clamp for rendering later
                                     # l = 0.0 if l < 0.0
                                     # l = 1.0 if l > 1.0
