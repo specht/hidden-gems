@@ -2,6 +2,7 @@
 # frozen_string_literal: true
 
 require "json"
+require "optparse"
 require "zlib"
 require_relative "include/key_input"
 
@@ -28,7 +29,7 @@ require_relative "include/key_input"
 class HgAnsiCliPlayer
     DEFAULT_FPS = 15.0
 
-    def initialize(path, fps: DEFAULT_FPS, loop: false)
+    def initialize(path, fps: DEFAULT_FPS, loop: false, quit_at_end: false)
         @path = path
         @fps = fps.to_f
         @loop = loop
@@ -40,6 +41,7 @@ class HgAnsiCliPlayer
         @idx = 0
         @paused = false
         @quit = false
+        @quit_at_end = quit_at_end
         @last_tick = monotonic
     end
 
@@ -128,6 +130,9 @@ class HgAnsiCliPlayer
         if next_idx >= @frames.length
             if @loop
                 next_idx = 0
+            elsif @quit_at_end
+                next_idx = @frames.length - 1
+                @quit = true
             else
                 next_idx = @frames.length - 1
                 @paused = true
@@ -188,25 +193,32 @@ class HgAnsiCliPlayer
 end
 
 # ---- CLI ----
-if ARGV.empty?
-    warn "Usage: ruby ansi_player.rb recording.json.gz [--fps N] [--loop]"
-    exit 1
-end
-
-path = ARGV.shift
 fps = HgAnsiCliPlayer::DEFAULT_FPS
-looping = true
+looping = false
 show_stdin = true
+quit_at_end = false
 
-while (arg = ARGV.shift)
-    case arg
-    when "--fps"
-        fps = Float(ARGV.shift || raise("Missing value for --fps"))
-    when "--loop"
-        looping = true
-    else
-        raise "Unknown argument: #{arg}"
+opt_parser = OptionParser.new do |opts|
+    opts.banner = <<~BANNER
+    Usage: ./ansi_player.rb [options] recording.json.gz"
+    BANNER
+
+    opts.on("--fps=N", Float, "Max frames/second (default: #{fps})") do |x|
+        fps = x
+    end
+    opts.on("--[no-]loop", "Play in loop (default: #{looping})") do |x|
+        looping = x
+    end
+    opts.on("--[no-]quit-at-end", "Quit player at end (default: #{quit_at_end})") do |x|
+        quit_at_end = x
     end
 end
+opt_parser.parse!(ARGV)
 
-HgAnsiCliPlayer.new(path, fps: fps, loop: looping).run
+if ARGV.empty?
+    warn opt_parser.help()
+    exit 1
+end
+path = ARGV.shift
+
+HgAnsiCliPlayer.new(path, fps: fps, loop: looping, quit_at_end: quit_at_end).run
