@@ -34,7 +34,7 @@ OVERTIME_BUDGET       = 1.5
 
 OPTIONS_FOR_BOT = %w(stage_key width height generator max_ticks emit_signals
                      emit_signal_channels vis_radius max_gems gem_spawn_rate
-                     gem_ttl signal_radius signal_cutoff signal_noise
+                     gem_ttl max_antennas signal_radius signal_cutoff signal_noise
                      signal_quantization signal_fade enable_debug timeout_scale)
 
 ANSI = /\e\[[0-9;:<>?]*[@-~]/
@@ -163,15 +163,15 @@ class Runner
 
     def initialize(seed:, width:, height:, generator:, max_ticks:,
                    vis_radius:, gem_spawn_rate:, gem_ttl:, max_gems:,
-                   emit_signals:, emit_signal_channels:,signal_radius:,
-                   signal_quantization:, signal_noise:, signal_cutoff:,
-                   signal_fade:, swap_bots:, cache:, profile:,
-                   check_determinism:, use_docker:, docker_workdirs:,
-                   rounds:, round_seeds:, verbose:, max_tps:,
-                   announcer_enabled:, bot_chatter:, ansi_log_path:,
-                   write_highlights:, write_stdin:, show_timings:,
-                   start_paused:, contest_mode:, highlight_color:,
-                   enable_debug:, timeout_scale:
+                   max_antennas:, emit_signals:, emit_signal_channels:,
+                   signal_radius:, signal_quantization:, signal_noise:,
+                   signal_cutoff:, signal_fade:, swap_bots:, cache:,
+                   profile:, check_determinism:, use_docker:,
+                   docker_workdirs:, rounds:, round_seeds:, verbose:,
+                   max_tps:, announcer_enabled:, bot_chatter:,
+                   ansi_log_path:, write_highlights:, write_stdin:,
+                   show_timings:, start_paused:, contest_mode:,
+                   highlight_color:, enable_debug:, timeout_scale:
                    )
         @seed = seed
         @width = width
@@ -182,6 +182,7 @@ class Runner
         @gem_spawn_rate = gem_spawn_rate
         @gem_ttl = gem_ttl
         @max_gems = max_gems
+        @max_antennas = max_antennas
         @emit_signals = emit_signals
         @emit_signal_channels = emit_signal_channels
         @signal_radius = signal_radius
@@ -226,7 +227,7 @@ class Runner
         @demo_mode = @ansi_log_path && File.basename(@ansi_log_path).include?('demo')
 
         param_rng = PCG32.new(@seed)
-        [:width, :height, :max_ticks, :vis_radius, :gem_ttl, :max_gems,
+        [:width, :height, :max_ticks, :vis_radius, :gem_ttl, :max_gems, :max_antennas,
          :signal_radius, :signal_fade, :rounds].each do |_key|
             key = "@#{_key}".to_sym
             value = instance_variable_get(key)
@@ -632,7 +633,7 @@ class Runner
         str.gsub(/\e\[[0-9;]*[A-Za-z]/, '')
     end
 
-    def render(tick, signal_level, paused)
+    def render(tick, signal_level, paused, placed_antennas)
         fg_top_mix = mix_rgb_hex(UI_FOREGROUND_TOP, UI_BACKGROUND_TOP, 0.5)
         fg_bottom_mix = mix_rgb_hex(UI_FOREGROUND_BOTTOM, UI_BACKGROUND_BOTTOM, 0.5)
         StringIO.open do |io|
@@ -717,7 +718,8 @@ class Runner
                         c = ' ' * @tile_width
                         bg = FLOOR_COLOR
                         offset = (y << 16) | x
-                        if @maze.include?(offset)
+                        have_antenna = placed_antennas.any? { |x| x.include?(offset) }
+                        if @maze.include?(offset) && !have_antenna
                             unless @wall_color_cache.include?(offset)
                                 @wall_color_cache[offset] = mix_rgb_hex(WALL_COLOR, '#000000', paint_rng.next_float() * 0.25)
                             end
@@ -747,13 +749,21 @@ class Runner
                                 end
                                 if @emit_signals
                                     if signal_level[i].include?((y << 16) | x)
-                                        level = signal_level[i][(y << 16) | x]
-                                        # clamp signal level for rendering
-                                        level = 0.0 if level < 0.0
-                                        level = 1.0 if level > 1.0
-                                        bg = mix_rgb_hex(GEM_COLOR, bg, 1.0 - level)
+                                        unless @maze.include?((y << 16) | x) && !have_antenna
+                                            level = signal_level[i][(y << 16) | x]
+                                            # clamp signal level for rendering
+                                            level = 0.0 if level < 0.0
+                                            level = 1.0 if level > 1.0
+                                            bg = mix_rgb_hex(GEM_COLOR, bg, 1.0 - level)
+                                        end
                                     end
                                 end
+                            end
+                        end
+                        if have_antenna
+                            c = ANTENNA_EMOJI
+                            while vwidth(c) < @tile_width
+                                c += ' '
                             end
                         end
                         highlight_color = nil
@@ -901,7 +911,7 @@ class Runner
         end
     end
 
-    def spawn_gem(channel)
+    def spawn_gem(channel, placed_antennas)
         spawn_data = @gem_fel[@gem_fel_index]
         @gem_fel_index += 1
 
@@ -916,6 +926,11 @@ class Runner
         end
         @bots.each do |b|
             occupied_points << ((b[:position][1] << 16) | b[:position][0])
+        end
+        placed_antennas.each do |a|
+            a.each do |offset|
+                occupied_points << offset
+            end
         end
 
         dist_field = {}
@@ -985,9 +1000,7 @@ class Runner
                                     l = ((l * q).floor).to_f / q
                                 end
                                 l = 0.0 if l < @signal_cutoff.to_f
-                                unless @maze.include?(offset)
-                                    level[offset] = l
-                                end
+                                level[offset] = l
                                 seen[offset] = true
                                 new_wavefront << [dx, dy]
                             end
@@ -1142,6 +1155,9 @@ class Runner
         color_to_index = {'#00000000' => 0}
         index_to_color = ['#00000000']
 
+        antenna_stock = @bots.map { |b| @max_antennas }
+        placed_antennas = @bots.map { |b| [] }
+
         @events = []
         @events << { :type => 'match_start', :bots => @bots.map { |b| { name: b[:name], emoji: b[:emoji], position: b[:position] } } }
         @protocol = @bots.map { |b| [] }
@@ -1250,7 +1266,7 @@ class Runner
                     if @verbose >= 2 || @ansi_log_path
                         screen = nil
                         $timings.profile("render screen") do
-                            screen = render(running_tick, signal_level, @paused)
+                            screen = render(running_tick, signal_level, @paused, placed_antennas)
                         end
                         # @protocol.last[:screen] = screen
                         if @verbose >= 2
@@ -1329,12 +1345,20 @@ class Runner
                             data[:bot] = bot[:position]
                             data[:wall] = []
                             data[:floor] = []
+                            if @max_antennas > 0
+                                data[:antennas] = []
+                            end
                             data[:initiative] = (bot_with_initiative == i)
                             data[:visible_gems] = []
                             vis_key = (bot[:position][1] << 16) | bot[:position][0]
                             @visibility[vis_key].each do |t|
                                 key = @maze.include?(t) ? :wall : :floor
                                 data[key] << [t & 0xFFFF, t >> 16]
+                                if @max_antennas > 0
+                                    if placed_antennas.any? { |x| x.include?(t) }
+                                        data[:antennas] << [t & 0xFFFF, t >> 16]
+                                    end
+                                end
                                 @gems.each do |gem|
                                     if gem[:position_offset] == t
                                         data[:visible_gems] << { :position => gem[:position], :ttl => gem[:ttl] }
@@ -1353,6 +1377,15 @@ class Runner
                                         channel = g[:channel]
                                         level = signal_level[gi][vis_key] || 0.0
                                         data[:channels][channel] = format("%.6f", level).to_f
+                                    end
+                                end
+                                if @max_antennas > 0
+                                    data[:antenna_signals] = []
+                                    placed_antennas[i].each do |a|
+                                        ax = a & 0xFFFF
+                                        ay = a >> 16
+                                        signal = signal_level.each_with_index.map { |l, gi| l[a] || 0.0 }.sum
+                                        data[:antenna_signals] << { :position => [ax, ay], :signal => format("%.6f", signal).to_f }
                                     end
                                 end
                             end
@@ -1530,8 +1563,8 @@ class Runner
 
                             bot_position = @bots[i][:position]
                             prev_bot_position = bot_position.dup
+                            dir = {'N'=>[0,-1],'E'=>[1,0],'S'=>[0,1],'W'=>[-1,0]}
                             if ['N','E','S','W'].include?(command)
-                                dir = {'N'=>[0,-1],'E'=>[1,0],'S'=>[0,1],'W'=>[-1,0]}
                                 dx = bot_position[0] + dir[command][0]
                                 dy = bot_position[1] + dir[command][1]
                                 if dx >= 0 && dy >= 0 && dx < @width && dy < @height
@@ -1546,6 +1579,59 @@ class Runner
                                             end
                                         end
                                         @bots[i][:position] = [dx, dy] if target_occupied_by_bot.nil?
+                                    end
+                                end
+                            elsif @max_antennas > 0 && ['PAN', 'PAE', 'PAS', 'PAW'].include?(command)
+                                # Place Antenna NESW
+                                dx = bot_position[0] + dir[command[2]][0]
+                                dy = bot_position[1] + dir[command[2]][1]
+                                if dx >= 0 && dy >= 0 && dx < @width && dy < @height
+                                    offset = (dy << 16) | dx
+                                    unless @maze.include?(offset)
+                                        target_occupied_by_bot = nil
+                                        (0...@bots.size).each do |other|
+                                            next if other == i
+                                            next if @bots[other][:disqualified_for]
+                                            if @bots[other][:position] == [dx, dy]
+                                                target_occupied_by_bot = other
+                                                break
+                                            end
+                                        end
+                                        target_occupied_by_gem = nil
+                                        @gems.each_with_index do |gem, gi|
+                                            if gem[:position] == [dx, dy]
+                                                target_occupied_by_gem = gi
+                                                break
+                                            end
+                                        end
+                                        if target_occupied_by_bot.nil? && target_occupied_by_gem.nil? && antenna_stock[i] > 0
+                                            antenna_stock[i] -= 1
+                                            placed_antennas[i] << offset
+                                            @maze << offset
+                                            if @announcer_enabled
+                                                @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} placed an antenna (#{antenna_stock[i]} antenna#{antenna_stock[i] == 1 ? '' : 's'} remaining)." }
+                                                @events << { tick: @tick, type: 'antenna_placed', bot: i, position: [dx, dy], remaining_stock: antenna_stock[i] }
+                                            end
+                                        end
+                                    end
+                                end
+                            elsif @max_antennas > 0 &&  ['RAN', 'RAE', 'RAS', 'RAW'].include?(command)
+                                # Remove antenna NESW
+                                dx = bot_position[0] + dir[command[2]][0]
+                                dy = bot_position[1] + dir[command[2]][1]
+                                if dx >= 0 && dy >= 0 && dx < @width && dy < @height
+                                    offset = (dy << 16) | dx
+                                    have_antenna = placed_antennas.any? { |x| x.include?(offset) }
+                                    if have_antenna && antenna_stock[i] > 0
+                                        antenna_stock[i] -= 1
+                                        placed_antennas.each do |antennas|
+                                            antennas.delete(offset)
+                                        end
+                                        @maze.delete(offset)
+                                        if @announcer_enabled
+                                            @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} removed an antenna." }
+                                            @events << { tick: @tick, type: 'antenna_removed', bot: i, position: [dx, dy], remaining_stock: antenna_stock[i] }
+                                        end
                                     end
                                 end
                             elsif command == 'WAIT'
@@ -1619,7 +1705,7 @@ class Runner
                                     @tick >= @channel_blocked_until[channel]
                                 end
                                 unless can_spawn_channels.empty?
-                                    ttl_spawned += spawn_gem(@rng.sample(can_spawn_channels))
+                                    ttl_spawned += spawn_gem(@rng.sample(can_spawn_channels), placed_antennas)
                                     @events << { tick: @tick, type: 'gem_spawned', position: @gems.last[:position], ttl: @gems.last[:ttl], id: @gems.last[:id] }
                                 end
                             end
@@ -1748,6 +1834,7 @@ options = {
     max_gems: 1,
     gem_spawn_rate: 0.05,
     gem_ttl: 300,
+    max_antennas: 0,
     signal_radius: 10.0,
     signal_cutoff: 0.0,
     signal_noise: 0.0,
@@ -1858,6 +1945,9 @@ OptionParser.new do |opts|
     end
     opts.on("--max-gems GEMS", Integer, "Max. number of gems (default: #{options[:max_gems]})") do |x|
         options[:max_gems] = x
+    end
+    opts.on("--max-antennas N", Integer, "Max. number of antennas per bot (default: #{options[:max_antennas]})") do |x|
+        options[:max_antennas] = x
     end
     opts.on("-e", "--[no-]emit-signals", "Enable gem signals (default: #{options[:emit_signals]})") do |x|
         options[:emit_signals] = x

@@ -79,3 +79,18 @@ stage-3@0.2:
     signal_fade: 5..10
     gem_spawn_rate: 0.05
     max_ticks: 1200
+stage-4@0.1:
+    title: Signal Array
+    from: '2026-03-16'
+    generator: cellular
+    width: 44..49
+    height: 29
+    max_gems: 2..3
+    emit_signals: true
+    signal_radius: 5..10
+    vis_radius: 2..3
+    signal_noise: 0.01..0.025
+    signal_fade: 5..10
+    max_antennas: 1..5
+    gem_spawn_rate: 0.05
+    max_ticks: 1200
