@@ -1585,7 +1585,7 @@ class Runner
                                 # Place Antenna NESW
                                 dx = bot_position[0] + dir[command[2]][0]
                                 dy = bot_position[1] + dir[command[2]][1]
-                                if dx >= 0 && dy >= 0 && dx < @width && dy < @height
+                                if dx > 0 && dy > 0 && dx < @width - 1 && dy < @height - 1
                                     offset = (dy << 16) | dx
                                     target_occupied_by_bot = nil
                                     (0...@bots.size).each do |other|
