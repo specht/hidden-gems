@@ -1587,31 +1587,30 @@ class Runner
                                 dy = bot_position[1] + dir[command[2]][1]
                                 if dx >= 0 && dy >= 0 && dx < @width && dy < @height
                                     offset = (dy << 16) | dx
-                                    unless @maze.include?(offset)
-                                        target_occupied_by_bot = nil
-                                        (0...@bots.size).each do |other|
-                                            next if other == i
-                                            next if @bots[other][:disqualified_for]
-                                            if @bots[other][:position] == [dx, dy]
-                                                target_occupied_by_bot = other
-                                                break
-                                            end
+                                    target_occupied_by_bot = nil
+                                    (0...@bots.size).each do |other|
+                                        next if other == i
+                                        next if @bots[other][:disqualified_for]
+                                        if @bots[other][:position] == [dx, dy]
+                                            target_occupied_by_bot = other
+                                            break
                                         end
-                                        target_occupied_by_gem = nil
-                                        @gems.each_with_index do |gem, gi|
-                                            if gem[:position] == [dx, dy]
-                                                target_occupied_by_gem = gi
-                                                break
-                                            end
+                                    end
+                                    target_occupied_by_gem = nil
+                                    @gems.each_with_index do |gem, gi|
+                                        if gem[:position] == [dx, dy]
+                                            target_occupied_by_gem = gi
+                                            break
                                         end
-                                        if target_occupied_by_bot.nil? && target_occupied_by_gem.nil? && antenna_stock[i] > 0
-                                            antenna_stock[i] -= 1
-                                            placed_antennas[i] << offset
-                                            @maze << offset
-                                            if @announcer_enabled
-                                                @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} placed an antenna (#{antenna_stock[i]} antenna#{antenna_stock[i] == 1 ? '' : 's'} remaining)." }
-                                                @events << { tick: @tick, type: 'antenna_placed', bot: i, position: [dx, dy], remaining_stock: antenna_stock[i] }
-                                            end
+                                    end
+                                    target_occupied_by_antenna = placed_antennas.any? { |x| x.include?(offset) }
+                                    if target_occupied_by_bot.nil? && target_occupied_by_gem.nil? && !target_occupied_by_antenna && antenna_stock[i] > 0
+                                        antenna_stock[i] -= 1
+                                        placed_antennas[i] << offset
+                                        @maze << offset
+                                        if @announcer_enabled
+                                            @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} placed an antenna (#{antenna_stock[i]} antenna#{antenna_stock[i] == 1 ? '' : 's'} remaining)." }
+                                            @events << { tick: @tick, type: 'antenna_placed', bot: i, position: [dx, dy], remaining_stock: antenna_stock[i] }
                                         end
                                     end
                                 end
