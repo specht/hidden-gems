@@ -1585,7 +1585,7 @@ class Runner
                                 # Place Antenna NESW
                                 dx = bot_position[0] + dir[command[2]][0]
                                 dy = bot_position[1] + dir[command[2]][1]
-                                if dx > 0 && dy > 0 && dx < @width - 1 && dy < @height - 1
+                                if dx >= 0 && dy >= 0 && dx < @width && dy < @height
                                     offset = (dy << 16) | dx
                                     target_occupied_by_bot = nil
                                     (0...@bots.size).each do |other|
@@ -1604,7 +1604,7 @@ class Runner
                                         end
                                     end
                                     target_occupied_by_antenna = placed_antennas.any? { |x| x.include?(offset) }
-                                    if target_occupied_by_bot.nil? && target_occupied_by_gem.nil? && !target_occupied_by_antenna && antenna_stock[i] > 0
+                                    if @maze.include?(offset) && target_occupied_by_bot.nil? && target_occupied_by_gem.nil? && !target_occupied_by_antenna && antenna_stock[i] > 0
                                         antenna_stock[i] -= 1
                                         placed_antennas[i] << offset
                                         @maze << offset
@@ -1614,25 +1614,25 @@ class Runner
                                         end
                                     end
                                 end
-                            elsif @max_antennas > 0 &&  ['RAN', 'RAE', 'RAS', 'RAW'].include?(command)
-                                # Remove antenna NESW
-                                dx = bot_position[0] + dir[command[2]][0]
-                                dy = bot_position[1] + dir[command[2]][1]
-                                if dx >= 0 && dy >= 0 && dx < @width && dy < @height
-                                    offset = (dy << 16) | dx
-                                    have_antenna = placed_antennas.any? { |x| x.include?(offset) }
-                                    if have_antenna && antenna_stock[i] > 0
-                                        antenna_stock[i] -= 1
-                                        placed_antennas.each do |antennas|
-                                            antennas.delete(offset)
-                                        end
-                                        @maze.delete(offset)
-                                        if @announcer_enabled
-                                            @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} removed an antenna." }
-                                            @events << { tick: @tick, type: 'antenna_removed', bot: i, position: [dx, dy], remaining_stock: antenna_stock[i] }
-                                        end
-                                    end
-                                end
+                            # elsif @max_antennas > 0 &&  ['RAN', 'RAE', 'RAS', 'RAW'].include?(command)
+                            #     # Remove antenna NESW
+                            #     dx = bot_position[0] + dir[command[2]][0]
+                            #     dy = bot_position[1] + dir[command[2]][1]
+                            #     if dx >= 0 && dy >= 0 && dx < @width && dy < @height
+                            #         offset = (dy << 16) | dx
+                            #         have_antenna = placed_antennas.any? { |x| x.include?(offset) }
+                            #         if have_antenna && antenna_stock[i] > 0
+                            #             antenna_stock[i] -= 1
+                            #             placed_antennas.each do |antennas|
+                            #                 antennas.delete(offset)
+                            #             end
+                            #             @maze.delete(offset)
+                            #             if @announcer_enabled
+                            #                 @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} removed an antenna." }
+                            #                 @events << { tick: @tick, type: 'antenna_removed', bot: i, position: [dx, dy], remaining_stock: antenna_stock[i] }
+                            #             end
+                            #         end
+                            #     end
                             elsif command == 'WAIT'
                                 # no-op
                             else
