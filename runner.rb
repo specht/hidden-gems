@@ -795,7 +795,7 @@ class Runner
             placed_portals.each.with_index do |portals_for_bot, bot_index|
                 portals_for_bot.each.with_index do |portal_pair, portal_index|
                     portal_pair.each do |portal|
-                        portal_override[portal[0]] = PORTAL_EMOJIS[bot_index * 4 + portal_index]
+                        portal_override[portal[0]] = PORTAL_EMOJIS[(bot_index * 4 + portal_index) % PORTAL_EMOJIS.size]
                     end
                 end
             end
@@ -1812,46 +1812,48 @@ class Runner
                             elsif @max_portals > 0 && command =~ /^P[1-4][NESW]$/
                                 # Place Portal 1-4 NESW
                                 portal_id = command[1].to_i - 1
-                                dx = bot_position[0] + dir[command[2]][0]
-                                dy = bot_position[1] + dir[command[2]][1]
-                                if dx >= 0 && dy >= 0 && dx < @width && dy < @height
-                                    offset = (dy << 16) | dx
-                                    # target must be on wall
-                                    if @maze.include?(offset)
-                                        # target must not be part of another portal (complete or incomplete)
-                                        occupied = false
-                                        placed_portals.each do |portals_for_bot|
-                                            portals_for_bot.each do |portal_pair|
-                                                portal_pair.each do |portal|
-                                                    if portal.include?(offset)
-                                                        occupied = true
-                                                        break
+                                if portal_id >= 0 && portal_id < @max_portals
+                                    dx = bot_position[0] + dir[command[2]][0]
+                                    dy = bot_position[1] + dir[command[2]][1]
+                                    if dx >= 0 && dy >= 0 && dx < @width && dy < @height
+                                        offset = (dy << 16) | dx
+                                        # target must be on wall
+                                        if @maze.include?(offset)
+                                            # target must not be part of another portal (complete or incomplete)
+                                            occupied = false
+                                            placed_portals.each do |portals_for_bot|
+                                                portals_for_bot.each do |portal_pair|
+                                                    portal_pair.each do |portal|
+                                                        if portal.include?(offset)
+                                                            occupied = true
+                                                            break
+                                                        end
                                                     end
                                                 end
+                                                break if occupied
                                             end
-                                            break if occupied
-                                        end
-                                        unless occupied
-                                            # each portal can have at most 2 placements (entrance and exit)
-                                            if placed_portals[i][portal_id].size < 2
-                                                # prepare entry with portal offset and bot position at time of placement
-                                                entry = [offset, (bot_position[1] << 16) | bot_position[0]]
-                                                placed_portals[i][portal_id] << entry
-                                                if placed_portals[i][portal_id].size == 1
-                                                    @events << { tick: @tick, type: 'portal_half_placed', bot: i, portal_id: portal_id, position: [dx, dy] }
-                                                else
-                                                    @events << { tick: @tick, type: 'portal_completed', bot: i, portal_id: portal_id, position: [dx, dy] }
-                                                end
-                                                if @announcer_enabled
+                                            unless occupied
+                                                # each portal can have at most 2 placements (entrance and exit)
+                                                if placed_portals[i][portal_id].size < 2
+                                                    # prepare entry with portal offset and bot position at time of placement
+                                                    entry = [offset, (bot_position[1] << 16) | bot_position[0]]
+                                                    placed_portals[i][portal_id] << entry
                                                     if placed_portals[i][portal_id].size == 1
-                                                        @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} placed the first half of portal #{portal_id + 1}." }
+                                                        @events << { tick: @tick, type: 'portal_half_placed', bot: i, portal_id: portal_id, position: [dx, dy] }
                                                     else
-                                                        @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} completed portal #{portal_id + 1}." }
+                                                        @events << { tick: @tick, type: 'portal_completed', bot: i, portal_id: portal_id, position: [dx, dy] }
+                                                    end
+                                                    if @announcer_enabled
+                                                        if placed_portals[i][portal_id].size == 1
+                                                            @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} placed the first half of portal #{portal_id + 1}." }
+                                                        else
+                                                            @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} completed portal #{portal_id + 1}." }
+                                                        end
                                                     end
                                                 end
                                             end
-                                        end
 
+                                        end
                                     end
                                 end
                             elsif command == 'WAIT'
