@@ -15,6 +15,7 @@ end
 require 'date'
 require 'digest'
 require 'fileutils'
+require 'io/console'
 require 'json'
 require 'open3'
 require 'openssl'
@@ -160,7 +161,7 @@ class Runner
     Bot = Struct.new(:stdin, :stdout, :stderr, :wait_thr)
 
     attr_accessor :round, :stage_title, :stage_key, :timeout_scale
-    attr_reader :bots, :rng
+    attr_reader :bots, :rng, :interactive_mode
 
     def initialize(seed:, width:, height:, generator:, max_ticks:,
                    vis_radius:, gem_spawn_rate:, gem_ttl:, max_gems:,
@@ -228,6 +229,7 @@ class Runner
         @timeout_scale = timeout_scale
         @faded_highlight_color = mix_rgb_hex(@highlight_color, '#000000', 0.25)
         @demo_mode = @ansi_log_path && File.basename(@ansi_log_path).include?('demo')
+        @interactive_mode = false
 
         param_rng = PCG32.new(@seed)
         [:width, :height, :max_ticks, :vis_radius, :gem_ttl, :max_gems, :max_antennas,
@@ -498,6 +500,107 @@ class Runner
         end
     end
 
+    def read_interactive_command(prompt = "Your move> ")
+        buffer = +""
+
+        print prompt
+        STDOUT.flush
+
+        loop do
+            ch = STDIN.getch
+
+            case ch
+            when "\r", "\n"
+                puts
+                cmd = buffer.strip
+                return cmd.empty? ? "WAIT" : cmd.upcase
+
+            when "\u0003" # Ctrl-C
+                raise Interrupt
+
+            when "\u007F", "\b" # Backspace on Unix/Windows
+                unless buffer.empty?
+                    buffer.chop!
+                    print "\b \b"
+                    STDOUT.flush
+                end
+
+            when "\e" # ANSI escape sequence: arrows on Linux/macOS, sometimes Windows terminals too
+                begin
+                    ch2 = STDIN.read_nonblock(1)
+                    if ch2 == "["
+                        ch3 = STDIN.read_nonblock(1)
+                        case ch3
+                        when "A" then puts; return "N"
+                        when "B" then puts; return "S"
+                        when "C" then puts; return "E"
+                        when "D" then puts; return "W"
+                        end
+                    end
+                rescue IO::WaitReadable, EOFError
+                end
+
+            when "\u0000", "\u00E0" # Windows extended keys
+                begin
+                    ch2 = STDIN.getch
+                    case ch2
+                    when "H" then puts; return "N" # up
+                    when "P" then puts; return "S" # down
+                    when "M" then puts; return "E" # right
+                    when "K" then puts; return "W" # left
+                    end
+                rescue EOFError
+                end
+
+            else
+                # Allow regular typed commands like WAIT, PAN, P1N, json, etc.
+                if ch >= " " && ch != "\e"
+                    buffer << ch
+                    print ch
+                    STDOUT.flush
+                end
+            end
+        end
+    end
+
+    def start_interactive_bot(bot_index)
+        bot_stdin_r, bot_stdin_w = IO.pipe
+        bot_stdout_r, bot_stdout_w = IO.pipe
+
+        thread = Thread.new do
+            loop do
+                line = bot_stdin_r.gets
+                break if line.nil?
+
+                begin
+                    parsed = JSON.parse(line)
+                    compact = parsed.to_json
+                rescue
+                    compact = line
+                end
+
+                puts
+                puts "=== INTERACTIVE BOT #{bot_index} INPUT ==="
+                puts compact
+                puts "=== END INPUT ==="
+                puts "Attention: Don't hold keys pressed, don't press multiple keys at once. You may use arrow keys to navigate."
+
+                response = STDIN.raw { read_interactive_command("Your move> ") }
+                break if response.nil?
+
+                bot_stdout_w.puts(response.strip.upcase)
+                bot_stdout_w.flush
+            end
+        end
+
+        stdin  = bot_stdin_w
+        stdout = bot_stdout_r
+        stderr = StringIO.new
+        wait_thr = Struct.new(:pid).new(thread.object_id)
+
+        Bot.new(stdin, stdout, stderr, wait_thr)
+    end
+
     def mix_rgb_hex(c1, c2, t)
         x = c1[1..].scan(/../).map { |h| h.to_i(16) }
         y = c2[1..].scan(/../).map { |h| h.to_i(16) }
@@ -636,7 +739,7 @@ class Runner
         str.gsub(/\e\[[0-9;]*[A-Za-z]/, '')
     end
 
-    def render(tick, signal_level, paused, placed_antennas)
+    def render(tick, signal_level, paused, placed_antennas, placed_portals)
         fg_top_mix = mix_rgb_hex(UI_FOREGROUND_TOP, UI_BACKGROUND_TOP, 0.5)
         fg_bottom_mix = mix_rgb_hex(UI_FOREGROUND_BOTTOM, UI_BACKGROUND_BOTTOM, 0.5)
         StringIO.open do |io|
@@ -687,6 +790,15 @@ class Runner
             @bg_highlight ||= {}
 
             bot_highlights = []
+
+            portal_override = {}
+            placed_portals.each.with_index do |portals_for_bot, bot_index|
+                portals_for_bot.each.with_index do |portal_pair, portal_index|
+                    portal_pair.each do |portal|
+                        portal_override[portal[0]] = PORTAL_EMOJIS[bot_index * 4 + portal_index]
+                    end
+                end
+            end
 
             if @enable_debug
                 @bots.each.with_index do |x, i|
@@ -765,6 +877,12 @@ class Runner
                         end
                         if have_antenna
                             c = ANTENNA_EMOJI
+                            while vwidth(c) < @tile_width
+                                c += ' '
+                            end
+                        end
+                        if portal_override.include?(offset)
+                            c = portal_override[offset]
                             while vwidth(c) < @tile_width
                                 c += ' '
                             end
@@ -895,6 +1013,21 @@ class Runner
 
     def add_bot(path, bot_args = [])
         @bots << {:position => @spawn_points.shift, :score => 0, :name => "Botty McBotface", :emoji => '🤖', :overtime_used => 0.0, :disqualified_for => nil, :response_times => [], :stderr_log => []}
+
+        bot_index = @bots_io.size
+
+        if File.basename(path) == "interactive"
+            @interactive_mode = true
+            @bots.last[:name] = "Interactive"
+            @bots.last[:emoji] = '🤖'
+
+            # Disable timeouts entirely
+            @timeout_scale = 1e9
+
+            @bots_io << start_interactive_bot(bot_index)
+            return
+        end
+
         yaml_path = File.join(File.expand_path(path), 'bot.yaml')
         if File.exist?(yaml_path)
             info = YAML.load(File.read(yaml_path))
@@ -907,7 +1040,7 @@ class Runner
                 raise "Error in bot.yaml: emoji must be at most 2 characters wide (#{@bots.last[:emoji]} is #{vwidth(@bots.last[:emoji])} characters wide)"
             end
         end
-        bot_index = @bots_io.size
+
         @bots_io << start_bot(path, @docker_workdirs[bot_index], bot_args) do |line|
             @message_queue << {:bot => bot_index, :line => line}
             @bots[bot_index][:stderr_log] << line
@@ -1144,9 +1277,11 @@ class Runner
         @tick = 0
         @tps = 0
         t0 = Time.now.to_f
-        begin
-            STDIN.echo = false
-        rescue
+        unless @interactive_mode
+            begin
+                STDIN.echo = false
+            rescue
+            end
         end
         results = @bots.map do |b|
              { :ticks_to_first_capture => nil }
@@ -1194,7 +1329,7 @@ class Runner
         @paused = @start_paused
         break_on_tick = nil
         begin
-            print "\033[?25l" if @verbose >= 2
+            print "\033[?25l" if @verbose >= 2 && !@interactive_mode
             loop do
                 break if break_on_tick && @tick >= break_on_tick
                 tf0 = Time.now.to_f
@@ -1276,10 +1411,13 @@ class Runner
                     if @verbose >= 2 || @ansi_log_path
                         screen = nil
                         $timings.profile("render screen") do
-                            screen = render(running_tick, signal_level, @paused, placed_antennas)
+                            screen = render(running_tick, signal_level, @paused, placed_antennas, placed_portals)
                         end
                         # @protocol.last[:screen] = screen
                         if @verbose >= 2
+                            if @interactive_mode
+                                print "\033[2J\033[H"
+                            end
                             print screen
                         end
                         frames << screen
@@ -1594,11 +1732,12 @@ class Runner
                             bot_position = @bots[i][:position]
                             prev_bot_position = bot_position.dup
                             dir = {'N'=>[0,-1],'E'=>[1,0],'S'=>[0,1],'W'=>[-1,0]}
-                            if ['N','E','S','W'].include?(command)
+                            if command =~ /^[NESW]$/
+                                # move NESW
                                 dx = bot_position[0] + dir[command][0]
                                 dy = bot_position[1] + dir[command][1]
                                 if dx >= 0 && dy >= 0 && dx < @width && dy < @height
-                                    unless @maze.include?((dy << 16) | dx)
+                                    if (!@maze.include?((dy << 16) | dx))
                                         target_occupied_by_bot = nil
                                         (0...@bots.size).each do |other|
                                             next if other == i
@@ -1609,9 +1748,35 @@ class Runner
                                             end
                                         end
                                         @bots[i][:position] = [dx, dy] if target_occupied_by_bot.nil?
+                                    elsif @max_portals > 0
+                                        # check for portal
+                                        placed_portals.each_with_index do |portals_for_bot, bot_index|
+                                            portals_for_bot.each_with_index do |portal_pair, portal_index|
+                                                portal_pair.each.with_index do |portal, portal_half_index|
+                                                    if portal[0] == ((dy << 16) | dx)
+                                                        # teleport to other half if exists, otherwise ignore move
+                                                        if portal_pair.size == 2
+                                                            other_half = portal_pair[1 - portal_half_index]
+                                                            other_half_x = other_half[1] & 0xFFFF
+                                                            other_half_y = other_half[1] >> 16
+                                                            target_occupied_by_bot = nil
+                                                            (0...@bots.size).each do |other|
+                                                                next if other == i
+                                                                next if @bots[other][:disqualified_for]
+                                                                if @bots[other][:position] == [other_half_x, other_half_y]
+                                                                    target_occupied_by_bot = other
+                                                                    break
+                                                                end
+                                                            end
+                                                            @bots[i][:position] = [other_half_x, other_half_y] if target_occupied_by_bot.nil?
+                                                        end
+                                                    end
+                                                end
+                                            end
+                                        end
                                     end
                                 end
-                            elsif @max_antennas > 0 && ['PAN', 'PAE', 'PAS', 'PAW'].include?(command)
+                            elsif @max_antennas > 0 && command =~ /^PA[NESW]$/
                                 # Place Antenna NESW
                                 dx = bot_position[0] + dir[command[2]][0]
                                 dy = bot_position[1] + dir[command[2]][1]
@@ -1656,10 +1821,12 @@ class Runner
                                         # target must not be part of another portal (complete or incomplete)
                                         occupied = false
                                         placed_portals.each do |portals_for_bot|
-                                            portals_for_bot.each do |portal|
-                                                if portal.include?(offset)
-                                                    occupied = true
-                                                    break
+                                            portals_for_bot.each do |portal_pair|
+                                                portal_pair.each do |portal|
+                                                    if portal.include?(offset)
+                                                        occupied = true
+                                                        break
+                                                    end
                                                 end
                                             end
                                             break if occupied
@@ -1807,7 +1974,7 @@ class Runner
                 kill_bot_process(b)
             end
         ensure
-            print "\033[?25h" if @verbose >= 2
+            print "\033[?25h" if @verbose >= 2 && !@interactive_mode
             begin
                 STDIN.echo = true
             rescue
