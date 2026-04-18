@@ -109,3 +109,19 @@ stage-4@0.2:
     max_antennas: 3..5
     gem_spawn_rate: 0.05
     max_ticks: 1200
+stage-5@0.1:
+    title: Portal Nexus
+    from: '2026-04-20'
+    generator: cellular
+    width: 44..49
+    height: 29
+    max_gems: 1..3
+    emit_signals: true
+    emit_signal_channels: true
+    signal_radius: 5..10
+    vis_radius: 3..7
+    signal_noise: 0.01..0.025
+    signal_fade: 5..10
+    max_portals: 4
+    gem_spawn_rate: 0.03..0.05
+    max_ticks: 1200

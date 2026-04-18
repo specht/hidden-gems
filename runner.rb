@@ -34,8 +34,9 @@ OVERTIME_BUDGET       = 1.5
 
 OPTIONS_FOR_BOT = %w(stage_key width height generator max_ticks emit_signals
                      emit_signal_channels vis_radius max_gems gem_spawn_rate
-                     gem_ttl max_antennas signal_radius signal_cutoff signal_noise
-                     signal_quantization signal_fade enable_debug timeout_scale)
+                     gem_ttl max_antennas max_portals signal_radius
+                     signal_cutoff signal_noise signal_quantization
+                     signal_fade enable_debug timeout_scale)
 
 ANSI = /\e\[[0-9;:<>?]*[@-~]/
 
@@ -105,7 +106,7 @@ class Runner
     UI_BACKGROUND_BOTTOM = '#232626'
     UI_FOREGROUND_BOTTOM = '#d3d7cf'
 
-    PORTAL_EMOJIS = ['🔴', '🔵', '🟢', '🟡']
+    PORTAL_EMOJIS = %w(🔴 🟠 🟡 🟢 🔵 🟣 ⚪ ⚫)
     ANTENNA_EMOJI = '📡'
     GEM_EMOJI = '💎'
     ANNOUNCER_EMOJI = '🎙️'
@@ -163,8 +164,9 @@ class Runner
 
     def initialize(seed:, width:, height:, generator:, max_ticks:,
                    vis_radius:, gem_spawn_rate:, gem_ttl:, max_gems:,
-                   max_antennas:, emit_signals:, emit_signal_channels:,
-                   signal_radius:, signal_quantization:, signal_noise:,
+                   max_antennas:, max_portals:, emit_signals:,
+                   emit_signal_channels:, signal_radius:,
+                   signal_quantization:, signal_noise:,
                    signal_cutoff:, signal_fade:, swap_bots:, cache:,
                    profile:, check_determinism:, use_docker:,
                    docker_workdirs:, rounds:, round_seeds:, verbose:,
@@ -183,6 +185,7 @@ class Runner
         @gem_ttl = gem_ttl
         @max_gems = max_gems
         @max_antennas = max_antennas
+        @max_portals = max_portals
         @emit_signals = emit_signals
         @emit_signal_channels = emit_signal_channels
         @signal_radius = signal_radius
@@ -228,7 +231,7 @@ class Runner
 
         param_rng = PCG32.new(@seed)
         [:width, :height, :max_ticks, :vis_radius, :gem_ttl, :max_gems, :max_antennas,
-         :signal_radius, :signal_fade, :rounds].each do |_key|
+         :max_portals, :signal_radius, :signal_fade, :rounds].each do |_key|
             key = "@#{_key}".to_sym
             value = instance_variable_get(key)
             if value.is_a?(String) && value.include?('..')
@@ -1157,6 +1160,13 @@ class Runner
 
         antenna_stock = @bots.map { |b| @max_antennas }
         placed_antennas = @bots.map { |b| [] }
+        # placed_portals:
+        # - for each bot:
+        #  - for each portal index:
+        #    - list with 0, 1 or 2 entries of:
+        #      - offset of placed portal
+        #      - offset the portal was placed from
+        placed_portals = @bots.map { |b| (0...@max_portals).map { |i| [] } }
 
         @events = []
         @events << { :type => 'match_start', :bots => @bots.map { |b| { name: b[:name], emoji: b[:emoji], position: b[:position] } } }
@@ -1348,6 +1358,11 @@ class Runner
                             if @max_antennas > 0
                                 data[:antennas] = []
                             end
+                            if @max_portals > 0
+                                data[:portals] = []
+                                data[:portal_stubs] = []
+                            end
+
                             data[:initiative] = (bot_with_initiative == i)
                             data[:visible_gems] = []
                             vis_key = (bot[:position][1] << 16) | bot[:position][0]
@@ -1357,6 +1372,21 @@ class Runner
                                 if @max_antennas > 0
                                     if placed_antennas.any? { |x| x.include?(t) }
                                         data[:antennas] << [t & 0xFFFF, t >> 16]
+                                    end
+                                end
+                                if @max_portals > 0
+                                    placed_portals.each.with_index do |portals_for_bot, bot_index|
+                                        portals_for_bot.each.with_index do |portal_pair, portal_index|
+                                            portal_pair.each do |portal|
+                                                if portal[0] == t
+                                                    if portal_pair.size == 2
+                                                        data[:portals] << [t & 0xFFFF, t >> 16]
+                                                    else
+                                                        data[:portal_stubs] << [t & 0xFFFF, t >> 16]
+                                                    end
+                                                end
+                                            end
+                                        end
                                     end
                                 end
                                 @gems.each do |gem|
@@ -1614,25 +1644,49 @@ class Runner
                                         end
                                     end
                                 end
-                            # elsif @max_antennas > 0 &&  ['RAN', 'RAE', 'RAS', 'RAW'].include?(command)
-                            #     # Remove antenna NESW
-                            #     dx = bot_position[0] + dir[command[2]][0]
-                            #     dy = bot_position[1] + dir[command[2]][1]
-                            #     if dx >= 0 && dy >= 0 && dx < @width && dy < @height
-                            #         offset = (dy << 16) | dx
-                            #         have_antenna = placed_antennas.any? { |x| x.include?(offset) }
-                            #         if have_antenna && antenna_stock[i] > 0
-                            #             antenna_stock[i] -= 1
-                            #             placed_antennas.each do |antennas|
-                            #                 antennas.delete(offset)
-                            #             end
-                            #             @maze.delete(offset)
-                            #             if @announcer_enabled
-                            #                 @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} removed an antenna." }
-                            #                 @events << { tick: @tick, type: 'antenna_removed', bot: i, position: [dx, dy], remaining_stock: antenna_stock[i] }
-                            #             end
-                            #         end
-                            #     end
+                            elsif @max_portals > 0 && command =~ /^P[1-4][NESW]$/
+                                # Place Portal 1-4 NESW
+                                portal_id = command[1].to_i - 1
+                                dx = bot_position[0] + dir[command[2]][0]
+                                dy = bot_position[1] + dir[command[2]][1]
+                                if dx >= 0 && dy >= 0 && dx < @width && dy < @height
+                                    offset = (dy << 16) | dx
+                                    # target must be on wall
+                                    if @maze.include?(offset)
+                                        # target must not be part of another portal (complete or incomplete)
+                                        occupied = false
+                                        placed_portals.each do |portals_for_bot|
+                                            portals_for_bot.each do |portal|
+                                                if portal.include?(offset)
+                                                    occupied = true
+                                                    break
+                                                end
+                                            end
+                                            break if occupied
+                                        end
+                                        unless occupied
+                                            # each portal can have at most 2 placements (entrance and exit)
+                                            if placed_portals[i][portal_id].size < 2
+                                                # prepare entry with portal offset and bot position at time of placement
+                                                entry = [offset, (bot_position[1] << 16) | bot_position[0]]
+                                                placed_portals[i][portal_id] << entry
+                                                if placed_portals[i][portal_id].size == 1
+                                                    @events << { tick: @tick, type: 'portal_half_placed', bot: i, portal_id: portal_id, position: [dx, dy] }
+                                                else
+                                                    @events << { tick: @tick, type: 'portal_completed', bot: i, portal_id: portal_id, position: [dx, dy] }
+                                                end
+                                                if @announcer_enabled
+                                                    if placed_portals[i][portal_id].size == 1
+                                                        @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} placed the first half of portal #{portal_id + 1}." }
+                                                    else
+                                                        @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} completed portal #{portal_id + 1}." }
+                                                    end
+                                                end
+                                            end
+                                        end
+
+                                    end
+                                end
                             elsif command == 'WAIT'
                                 # no-op
                             else
