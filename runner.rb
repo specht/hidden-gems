@@ -2055,6 +2055,7 @@ options = {
     gem_spawn_rate: 0.05,
     gem_ttl: 300,
     max_antennas: 0,
+    max_portals: 0,
     signal_radius: 10.0,
     signal_cutoff: 0.0,
     signal_noise: 0.0,
@@ -2168,6 +2169,9 @@ OptionParser.new do |opts|
     end
     opts.on("--max-antennas N", Integer, "Max. number of antennas per bot (default: #{options[:max_antennas]})") do |x|
         options[:max_antennas] = x
+    end
+    opts.on("--max-portals N", Integer, "Max. number of portals per bot (default: #{options[:max_portals]})") do |x|
+        options[:max_portals] = x
     end
     opts.on("-e", "--[no-]emit-signals", "Enable gem signals (default: #{options[:emit_signals]})") do |x|
         options[:emit_signals] = x
