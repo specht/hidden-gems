@@ -13,8 +13,14 @@
  *   node maze.js -g uniform  --opts '{"roomWidth":[3,9]}'
  */
 
+const path = require('path');
 let ROT;
-try { ROT = require("rot-js"); } catch { ROT = require("./rot.min.js"); }
+try {
+    ROT = require("rot-js");
+} catch {
+    const localRot = path.join(__dirname, "rot.min.js");
+    ROT = require(localRot);
+}
 
 /* ==== BEGIN: contest PRNG adapter for rot.js (PCG32 XSH RR) ==== */
 class PCG32 {
