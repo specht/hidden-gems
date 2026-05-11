@@ -4,10 +4,11 @@ $LOAD_PATH.unshift File.expand_path("include/unicode-emoji-4.0.4/lib", __dir__)
 $LOAD_PATH.unshift File.expand_path("include/unicode-display_width-3.1.5/lib", __dir__)
 $LOAD_PATH.unshift File.expand_path("include/paint-2.3.0/lib", __dir__)
 
-require './include/fov_angle.rb'
-require './include/key_input.rb'
-require './include/pcg32.rb'
-require './include/timings.rb'
+$LOAD_PATH.unshift File.expand_path(__dir__)
+require 'include/fov_angle'
+require 'include/key_input'
+require 'include/pcg32'
+require 'include/timings'
 if Gem.win_platform?
     require 'fiddle/import'
 end
@@ -259,7 +260,8 @@ class Runner
     end
 
     def gen_maze
-        command = "node ./include/maze.js --width #{@width} --height #{@height} --generator #{@generator} --seed #{@seed} --wall \"#\" --floor \".\""
+        maze_script = File.expand_path("include/maze.js", __dir__)
+        command = "node #{maze_script} --width #{@width} --height #{@height} --generator #{@generator} --seed #{@seed} --wall \"#\" --floor \".\""
         maze = `#{command}`.strip.split("\n").map { |x| x.strip }.select do |line|
             line =~ /^[\.#]+$/
         end.map.with_index do |line, y|
@@ -2043,7 +2045,7 @@ class Runner
     end
 end
 
-stages = YAML.load(File.read('stages.yaml'))
+stages = YAML.load_file(File.join(__dir__, 'stages.yaml'))
 
 options = {
     stage: 'current',
@@ -2279,7 +2281,7 @@ end.parse!(runner_argv)
 positional = runner_argv.dup
 
 if positional.empty?
-    positional = ["random-walker"]
+    positional = [File.expand_path("random-walker", __dir__)]
 end
 
 if positional.size > 2
@@ -2318,7 +2320,7 @@ if options[:swap_bots]
 end
 
 if bot_paths.empty?
-    bot_paths << "random-walker"
+    bot_paths << File.expand_path("random-walker", __dir__)
 end
 
 if bot_paths.size > 2
@@ -2388,7 +2390,7 @@ if options[:rounds] == 1
             report[:stage_key] = stage_key
             report[:stage_title] = stage_title
             begin
-                report[:git_hash] = `git describe --always --dirty`.strip
+                report[:git_hash] = `git -C "#{__dir__}" describe --always --dirty`.strip
             rescue
             end
             report[:seed] = og_seed.to_s(36)
@@ -2502,7 +2504,7 @@ else
         report[:stage_key] = stage_key
         report[:stage_title] = stage_title
         begin
-            report[:git_hash] = `git describe --always --dirty`
+            report[:git_hash] = `git -C "#{__dir__}" describe --always --dirty`
         rescue
         end
         report[:seed] = og_seed.to_s(36)
