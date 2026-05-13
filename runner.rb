@@ -261,7 +261,7 @@ class Runner
 
     def gen_maze
         maze_script = File.expand_path("include/maze.js", __dir__)
-        command = "node #{maze_script} --width #{@width} --height #{@height} --generator #{@generator} --seed #{@seed} --wall \"#\" --floor \".\""
+        command = "node \"#{maze_script}\" --width #{@width} --height #{@height} --generator #{@generator} --seed #{@seed} --wall \"#\" --floor \".\""
         maze = `#{command}`.strip.split("\n").map { |x| x.strip }.select do |line|
             line =~ /^[\.#]+$/
         end.map.with_index do |line, y|
