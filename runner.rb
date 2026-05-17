@@ -208,6 +208,7 @@ class Runner
         @max_tps = max_tps
         @bots = []
         @bots_io = []
+        @bot_id_for_offset = {}
         @gems = []
         @gems_spawned = 0
         @gem_id_for_offset = {}
@@ -1219,28 +1220,28 @@ class Runner
                             bg = @wall_color_cache[offset]
                         end
                         $timings.profile("find bots") do
-                            (0...@bots.size).each do |_k|
-                                i = (_k + bot_with_initiative) % @bots.size
-                                bot = @bots[i]
+                            if @bot_id_for_offset.include?(offset)
+                                bot_index = @bot_id_for_offset[offset]
+                                bot = @bots[bot_index]
                                 next if bot[:disqualified_for]
-                                p = bot[:position]
-                                if p[0] == x && p[1] == y
-                                    c = @bots[i][:emoji]
-                                    while vwidth(c) < @tile_width
-                                        c += ' '
-                                    end
+                                c = bot[:emoji]
+                                while vwidth(c) < @tile_width
+                                    c += ' '
                                 end
                             end
                         end
+
                         $timings.profile("find gems") do
-                            @gems.each.with_index do |p, i|
-                                if p[:position][0] == x && p[:position][1] == y
-                                    c = GEM_EMOJI
-                                    while vwidth(c) < @tile_width
-                                        c += ' '
-                                    end
+                            if @gem_id_for_offset.include?(offset)
+                                gem_index = @gem_id_for_offset[offset]
+                                gem = @gems[gem_index]
+                                c = GEM_EMOJI
+                                while vwidth(c) < @tile_width
+                                    c += ' '
                                 end
-                                if @emit_signals
+                            end
+                            if @emit_signals
+                                @gems.each.with_index do |p, i|
                                     if signal_level[i].include?((y << 16) | x)
                                         unless @maze.include?((y << 16) | x) && !have_antenna
                                             level = signal_level[i][(y << 16) | x]
@@ -1391,6 +1392,7 @@ class Runner
 
     def add_bot(path, bot_args = [])
         @bots << {:position => @spawn_points.shift, :score => 0, :name => "Botty McBotface", :emoji => '🤖', :overtime_used => 0.0, :disqualified_for => nil, :response_times => [], :stderr_log => []}
+        @bot_id_for_offset[@bots.last[:position][1] << 16 | @bots.last[:position][0]] = @bots.size - 1
 
         bot_index = @bots_io.size
 
@@ -2125,7 +2127,13 @@ class Runner
                                                 break
                                             end
                                         end
-                                        @bots[i][:position] = [dx, dy] if target_occupied_by_bot.nil?
+                                        if target_occupied_by_bot.nil?
+                                            old_offset = (bot_position[1] << 16) | bot_position[0]
+                                            @bot_id_for_offset.delete(old_offset)
+                                            @bots[i][:position] = [dx, dy]
+                                            new_offset = (dy << 16) | dx
+                                            @bot_id_for_offset[new_offset] = i
+                                        end
                                     elsif @max_portals > 0
                                         # check for portal
                                         placed_portals.each_with_index do |portals_for_bot, bot_index|
@@ -2146,7 +2154,11 @@ class Runner
                                                                     break
                                                                 end
                                                             end
+                                                            old_offset = (@bots[i][:position][1] << 16) | @bots[i][:position][0]
+                                                            @bot_id_for_offset.delete(old_offset)
                                                             @bots[i][:position] = [other_half_x, other_half_y] if target_occupied_by_bot.nil?
+                                                            new_offset = (other_half_y << 16) | other_half_x
+                                                            @bot_id_for_offset[new_offset] = i
                                                         end
                                                     end
                                                 end
