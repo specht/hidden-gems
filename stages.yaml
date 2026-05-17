@@ -128,15 +128,15 @@ stage-5@0.1:
 stage-6@0.1:
     title: The Swarm
     from: '2026-05-25'
-    generator: cellular
-    width: 79
+    generator: mixed
+    width: 99
     height: 49
     max_gems: 4..12
     emit_signals: true
     emit_signal_channels: true
     signal_radius: 5..10
     vis_radius: 3..7
-    signal_noise: 0.01..0.025
+    signal_noise: 0
     signal_fade: 5..10
     max_portals: 4
     gem_spawn_rate: 0.03..0.05

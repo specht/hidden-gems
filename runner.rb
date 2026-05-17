@@ -23,6 +23,7 @@ require 'openssl'
 require 'optparse'
 require 'paint'
 require 'set'
+require 'shellwords'
 require 'stringio'
 require 'strscan'
 require 'unicode/display_width'
@@ -260,14 +261,389 @@ class Runner
     end
 
     def gen_maze
+
         maze_script = File.expand_path("include/maze.js", __dir__)
-        command = "node \"#{maze_script}\" --width #{@width} --height #{@height} --generator #{@generator} --seed #{@seed} --wall \"#\" --floor \".\""
-        maze = `#{command}`.strip.split("\n").map { |x| x.strip }.select do |line|
-            line =~ /^[\.#]+$/
-        end.map.with_index do |line, y|
-            row = line.split('').map.with_index { |e, x| e == '#' ? (y << 16) | x : nil }
-        end.flatten.reject { |x| x.nil? }
-        Set.new(maze)
+
+        run_generator = lambda do |width, height, generator, seed|
+            command = [
+                "node",
+                Shellwords.escape(maze_script),
+                "--width", width.to_s,
+                "--height", height.to_s,
+                "--generator", Shellwords.escape(generator.to_s),
+                "--seed", Shellwords.escape(seed.to_s),
+                "--wall", Shellwords.escape("#"),
+                "--floor", Shellwords.escape(".")
+            ].join(" ")
+
+            `#{command}`.strip.split("\n").map(&:strip).select do |line|
+                line =~ /^[\.#]+$/
+            end
+        end
+
+        if @generator == 'mixed'
+            inner_segment_width = 0.15
+
+            raise "Mixed maze needs width >= 12 and height >= 7" if @width < 12 || @height < 7
+
+            inner_width = @width - 2
+            inner_height = @height - 2
+
+            door_count = @mixed_door_count || 4
+            door_count = [[door_count.to_i, 1].max, inner_height].min
+
+            # We reserve two vertical separator columns:
+            #
+            #   [left cellular] [separator] [eller] [separator] [right cellular]
+            #
+            usable_width = inner_width - 2
+
+            # Wider cellular sides, smaller Eller center.
+            w1 = (usable_width * (0.5 - inner_segment_width * 0.5)).round
+            w3 = (usable_width * (0.5 - inner_segment_width * 0.5)).round
+            w2 = usable_width - w1 - w3
+
+            # Defensive fallback for very small maps.
+            if w2 < 3
+                w2 = 3
+                remaining = usable_width - w2
+                w1 = remaining / 2
+                w3 = remaining - w1
+            end
+
+            widths = [w1, w2, w3]
+
+            parts = [
+                run_generator.call(widths[0] + 2, inner_height + 2, 'cellular', "#{@seed}-mixed-cellular-a"),
+                run_generator.call(widths[1] + 2, inner_height + 2, 'eller',    "#{@seed}-mixed-eller"),
+                run_generator.call(widths[2] + 2, inner_height + 2, 'cellular', "#{@seed}-mixed-cellular-b")
+            ]
+
+            # Remove temporary borders.
+            left_part = parts[0][1...-1].map do |line|
+                line[1...-1].chars
+            end
+
+            eller_part = parts[1][1...-1].map do |line|
+                line[1...-1].chars
+            end
+
+            right_part = parts[2][1...-1].map do |line|
+                line[1...-1].chars
+            end
+
+            # Pick roughly evenly spaced doorway rows.
+            door_rows = door_count.times.map do |i|
+                (((i + 1) * (inner_height + 1)) / (door_count + 1).to_f).round - 1
+            end
+
+            door_rows = door_rows.map do |y|
+                [[y, 0].max, inner_height - 1].min
+            end.uniq
+
+            # Defensive fill-up if rounding caused duplicates.
+            y = 0
+            while door_rows.size < door_count && y < inner_height
+                door_rows << y unless door_rows.include?(y)
+                y += 1
+            end
+
+            door_rows = door_rows.sort
+
+            # Helper: carve from a given cell to the nearest existing floor tile
+            # inside one submaze part.
+            #
+            # part is an array of char arrays.
+            #
+            # This is intentionally local to the submaze. It prevents separator openings
+            # from ending immediately in a cellular wall blob.
+            carve_to_nearest_floor = lambda do |part, start_x, start_y|
+                h = part.size
+                w = part[0].size
+
+                return if start_x < 0 || start_y < 0 || start_x >= w || start_y >= h
+
+                # If this cell is already floor, there is nothing to repair.
+                return if part[start_y][start_x] == '.'
+
+                seen = Array.new(h) { Array.new(w, false) }
+                parent = Array.new(h) { Array.new(w) }
+
+                queue = [[start_x, start_y]]
+                seen[start_y][start_x] = true
+                target = nil
+
+                until queue.empty?
+                    x, y = queue.shift
+
+                    if part[y][x] == '.'
+                        target = [x, y]
+                        break
+                    end
+
+                    [[1, 0], [-1, 0], [0, 1], [0, -1]].each do |dx, dy|
+                        nx = x + dx
+                        ny = y + dy
+
+                        next if nx < 0 || ny < 0 || nx >= w || ny >= h
+                        next if seen[ny][nx]
+
+                        seen[ny][nx] = true
+                        parent[ny][nx] = [x, y]
+                        queue << [nx, ny]
+                    end
+                end
+
+                # If there was no floor at all, just carve the starting tile.
+                unless target
+                    part[start_y][start_x] = '.'
+                    return
+                end
+
+                # Carve from the found floor back to the requested doorway cell.
+                x, y = target
+
+                while [x, y] != [start_x, start_y]
+                    part[y][x] = '.'
+                    x, y = parent[y][x]
+                end
+
+                part[start_y][start_x] = '.'
+            end
+
+            # Make doorway rows real on both sides.
+            #
+            # Left separator:
+            #   left_part right edge <-> separator <-> eller_part left edge
+            #
+            # Right separator:
+            #   eller_part right edge <-> separator <-> right_part left edge
+            door_rows.each do |y|
+                carve_to_nearest_floor.call(left_part,  w1 - 1, y)
+                carve_to_nearest_floor.call(eller_part, 0,      y)
+
+                carve_to_nearest_floor.call(eller_part, w2 - 1, y)
+                carve_to_nearest_floor.call(right_part, 0,      y)
+            end
+
+            # Stitch the parts together with two separator walls.
+            inner = inner_height.times.map do |y|
+                left_sep = door_rows.include?(y) ? '.' : '#'
+                right_sep = door_rows.include?(y) ? '.' : '#'
+
+                left_part[y].join + left_sep + eller_part[y].join + right_sep + right_part[y].join
+            end
+
+            # Convert to mutable boolean grid:
+            #
+            #   true  = floor
+            #   false = wall
+            #
+            grid = inner.map do |line|
+                line.chars.map { |c| c == '.' }
+            end
+
+            inside_bounds = lambda do |x, y|
+                x >= 0 && y >= 0 && x < inner_width && y < inner_height
+            end
+
+            flood_fill = lambda do |start_x, start_y|
+                visited = Array.new(inner_height) { Array.new(inner_width, false) }
+                queue = [[start_x, start_y]]
+                visited[start_y][start_x] = true
+
+                until queue.empty?
+                    x, y = queue.shift
+
+                    [[1, 0], [-1, 0], [0, 1], [0, -1]].each do |dx, dy|
+                        nx = x + dx
+                        ny = y + dy
+
+                        next unless inside_bounds.call(nx, ny)
+                        next if visited[ny][nx]
+                        next unless grid[ny][nx]
+
+                        visited[ny][nx] = true
+                        queue << [nx, ny]
+                    end
+                end
+
+                visited
+            end
+
+            find_first_floor = lambda do
+                inner_height.times do |y|
+                    inner_width.times do |x|
+                        return [x, y] if grid[y][x]
+                    end
+                end
+
+                nil
+            end
+
+            find_unvisited_floor = lambda do |visited|
+                inner_height.times do |y|
+                    inner_width.times do |x|
+                        return [x, y] if grid[y][x] && !visited[y][x]
+                    end
+                end
+
+                nil
+            end
+
+            carve_path_to_visited = lambda do |start_x, start_y, visited|
+                seen = Array.new(inner_height) { Array.new(inner_width, false) }
+                parent = Array.new(inner_height) { Array.new(inner_width) }
+
+                queue = [[start_x, start_y]]
+                seen[start_y][start_x] = true
+                target = nil
+
+                until queue.empty?
+                    x, y = queue.shift
+
+                    if visited[y][x]
+                        target = [x, y]
+                        break
+                    end
+
+                    [[1, 0], [-1, 0], [0, 1], [0, -1]].each do |dx, dy|
+                        nx = x + dx
+                        ny = y + dy
+
+                        next unless inside_bounds.call(nx, ny)
+                        next if seen[ny][nx]
+
+                        seen[ny][nx] = true
+                        parent[ny][nx] = [x, y]
+                        queue << [nx, ny]
+                    end
+                end
+
+                return unless target
+
+                x, y = target
+
+                while [x, y] != [start_x, start_y]
+                    grid[y][x] = true
+                    x, y = parent[y][x]
+                end
+
+                grid[start_y][start_x] = true
+            end
+
+            start = find_first_floor.call
+
+            unless start
+                grid[0][0] = true
+                start = [0, 0]
+            end
+
+            # Make sure all floor areas are globally connected.
+            loop do
+                visited = flood_fill.call(start[0], start[1])
+                unvisited = find_unvisited_floor.call(visited)
+
+                break unless unvisited
+
+                carve_path_to_visited.call(unvisited[0], unvisited[1], visited)
+            end
+
+        # Extra anti-lock-in pass:
+        #
+        # For an arena with several bots, tiny one-tile pockets and narrow dead ends
+        # can be annoying. This pass can open some constrained floor tiles a little.
+        #
+        # Tuning:
+        #
+        #   @mixed_anti_lock_in_passes
+        #       Number of passes over the map.
+        #       0 disables this feature.
+        #
+        #   @mixed_anti_lock_in_chance
+        #       Chance per detected dead end / near-dead-end to carve one neighboring wall.
+        #       0.0 disables carving.
+        #       1.0 carves every detected candidate.
+        #
+        anti_lock_in_passes = @mixed_anti_lock_in_passes || 1
+        anti_lock_in_chance = @mixed_anti_lock_in_chance || 0.35
+
+        anti_lock_in_passes = [anti_lock_in_passes.to_i, 0].max
+        anti_lock_in_chance = [[anti_lock_in_chance.to_f, 0.0].max, 1.0].min
+
+        anti_lock_in_passes.times do
+            changes = []
+
+            (1...(inner_height - 1)).each do |y|
+                (1...(inner_width - 1)).each do |x|
+                    next unless grid[y][x]
+
+                    open_neighbors = 0
+
+                    [[1, 0], [-1, 0], [0, 1], [0, -1]].each do |dx, dy|
+                        open_neighbors += 1 if grid[y + dy][x + dx]
+                    end
+
+                    # Only target true dead ends.
+                    # If this is still too much, keep this at <= 0.
+                    # If you want slightly more opening, use <= 1.
+                    next unless open_neighbors <= 1
+
+                    next if rand >= anti_lock_in_chance
+
+                    candidates = []
+
+                    [[1, 0], [-1, 0], [0, 1], [0, -1]].each do |dx, dy|
+                        nx = x + dx
+                        ny = y + dy
+
+                        next unless inside_bounds.call(nx, ny)
+                        next if grid[ny][nx]
+
+                        candidates << [nx, ny]
+                    end
+
+                    changes << candidates.sample if candidates.any?
+                end
+            end
+
+            changes.compact.each do |x, y|
+                grid[y][x] = true
+            end
+        end
+
+            # Re-run connectivity after anti-lock-in carving.
+            start = find_first_floor.call
+
+            loop do
+                visited = flood_fill.call(start[0], start[1])
+                unvisited = find_unvisited_floor.call(visited)
+
+                break unless unvisited
+
+                carve_path_to_visited.call(unvisited[0], unvisited[1], visited)
+            end
+
+            # Add one final outer border.
+            maze_lines = []
+            maze_lines << "#" * @width
+
+            grid.each do |row|
+                maze_lines << "#" + row.map { |floor| floor ? "." : "#" }.join + "#"
+            end
+
+            maze_lines << "#" * @width
+        else
+            maze_lines = run_generator.call(@width, @height, @generator, @seed)
+        end
+
+        walls = maze_lines.map.with_index do |line, y|
+            line.split('').map.with_index do |e, x|
+                e == '#' ? (y << 16) | x : nil
+            end
+        end.flatten.reject(&:nil?)
+
+        Set.new(walls)
     end
 
     def atomic_gzip_write(path, string)
