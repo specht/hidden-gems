@@ -39,7 +39,8 @@ OPTIONS_FOR_BOT = %w(stage_key width height generator max_ticks emit_signals
                      emit_signal_channels vis_radius max_gems gem_spawn_rate
                      gem_ttl max_antennas max_portals signal_radius
                      signal_cutoff signal_noise signal_quantization
-                     signal_fade enable_debug timeout_scale)
+                     signal_fade enable_debug timeout_scale
+                     instances_per_team comm_bytes)
 
 ANSI = /\e\[[0-9;:<>?]*[@-~]/
 
@@ -162,7 +163,7 @@ class Runner
 
     Bot = Struct.new(:stdin, :stdout, :stderr, :wait_thr)
 
-    attr_accessor :round, :stage_title, :stage_key, :timeout_scale
+    attr_accessor :round, :stage_title, :stage_key, :timeout_scale, :team_count
     attr_reader :bots, :rng, :interactive_mode
 
     def initialize(seed:, width:, height:, generator:, max_ticks:,
@@ -176,7 +177,8 @@ class Runner
                    max_tps:, announcer_enabled:, bot_chatter:,
                    ansi_log_path:, write_highlights:, write_stdin:,
                    show_timings:, start_paused:, contest_mode:,
-                   highlight_color:, enable_debug:, timeout_scale:
+                   highlight_color:, enable_debug:, timeout_scale:,
+                   instances_per_team:, comm_bytes:
                    )
         @seed = seed
         @width = width
@@ -230,6 +232,10 @@ class Runner
         @highlight_color = highlight_color
         @enable_debug = enable_debug
         @timeout_scale = timeout_scale
+        @team_count = 1
+        @instances_per_team = [instances_per_team.to_i, 1].max
+        @comm_bytes = [comm_bytes.to_i, 0].max
+        @bot_index_by_team_slot = {}
         @faded_highlight_color = mix_rgb_hex(@highlight_color, '#000000', 0.25)
         @demo_mode = @ansi_log_path && File.basename(@ansi_log_path).include?('demo')
         @interactive_mode = false
@@ -687,10 +693,11 @@ class Runner
             end
             @rng.shuffle!(@floor_tiles)
             @floor_tiles_set = Set.new(@floor_tiles)
-            @spawn_points = []
-            @spawn_points << @floor_tiles.shift
-            @spawn_points << @floor_tiles.shift
-            @spawn_points.map! do |offset|
+            spawn_count = @team_count * @instances_per_team
+            if @floor_tiles.size < spawn_count
+                raise "Not enough floor tiles for #{spawn_count} bot spawn points"
+            end
+            @spawn_points = @floor_tiles.shift(spawn_count).map do |offset|
                 [offset & 0xFFFF, offset >> 16]
             end
             @message_queue = Queue.new
@@ -1390,11 +1397,23 @@ class Runner
         end
     end
 
-    def add_bot(path, bot_args = [])
-        @bots << {:position => @spawn_points.shift, :score => 0, :name => "Botty McBotface", :emoji => '🤖', :overtime_used => 0.0, :disqualified_for => nil, :response_times => [], :stderr_log => []}
+    def add_bot(path, bot_args = [], team: @bots.size, slot: 0)
+        @bots << {
+            :team => team,
+            :slot => slot,
+            :position => @spawn_points.shift,
+            :score => 0,
+            :name => "Botty McBotface",
+            :emoji => '🤖',
+            :overtime_used => 0.0,
+            :disqualified_for => nil,
+            :response_times => [],
+            :stderr_log => []
+        }
         @bot_id_for_offset[@bots.last[:position][1] << 16 | @bots.last[:position][0]] = @bots.size - 1
 
         bot_index = @bots_io.size
+        @bot_index_by_team_slot[[team, slot]] = bot_index
 
         if File.basename(path) == "interactive"
             @interactive_mode = true
@@ -1424,6 +1443,16 @@ class Runner
         @bots_io << start_bot(path, @docker_workdirs[bot_index], bot_args) do |line|
             @message_queue << {:bot => bot_index, :line => line}
             @bots[bot_index][:stderr_log] << line
+        end
+    end
+
+    def add_team(path, team_index, bot_args = [])
+        if File.basename(path) == "interactive" && @instances_per_team > 1
+            raise "Interactive mode only supports one instance per team"
+        end
+
+        (0...@instances_per_team).each do |slot|
+            add_bot(path, bot_args, team: team_index, slot: slot)
         end
     end
 
@@ -1672,6 +1701,7 @@ class Runner
         ttl_spawned = 0
         color_to_index = {'#00000000' => 0}
         index_to_color = ['#00000000']
+        @team_buffers = Array.new(@team_count) { Array.new(@comm_bytes, 0) }
 
         antenna_stock = @bots.map { |b| @max_antennas }
         placed_antennas = @bots.map { |b| [] }
@@ -1868,8 +1898,17 @@ class Runner
                                 dk = OpenSSL::PKCS5.pbkdf2_hmac("#{@seed}/bot/#{i}", "scrim:v1:#{@seed}", 200_000, 4, "sha256")
                                 bot_seed = dk.unpack1("L<")
                                 data[:config][:bot_seed] = bot_seed
+                                data[:config][:team] = bot[:team]
+                                data[:config][:slot] = bot[:slot]
+                                data[:config][:team_count] = @team_count
+                                data[:config][:instances_per_team] = @instances_per_team
+                                data[:config][:comm_bytes] = @comm_bytes
                             end
                             data[:tick] = @tick
+                            data[:team] = bot[:team]
+                            data[:slot] = bot[:slot]
+                            data[:team_size] = @instances_per_team
+                            data[:team_buffer] = @team_buffers[bot[:team]].dup if @comm_bytes > 0
                             data[:bot] = bot[:position]
                             data[:wall] = []
                             data[:floor] = []
@@ -2476,6 +2515,8 @@ options = {
     highlight_color: '#ffffff',
     enable_debug: true,
     timeout_scale: 1.0,
+    instances_per_team: 1,
+    comm_bytes: 0,
 }
 
 unless ARGV.include?('--stage')
@@ -2564,6 +2605,12 @@ OptionParser.new do |opts|
     end
     opts.on("--max-portals N", Integer, "Max. number of portals per bot (default: #{options[:max_portals]})") do |x|
         options[:max_portals] = x
+    end
+    opts.on("--instances-per-team N", Integer, "Number of spawned copies per submitted bot (default: #{options[:instances_per_team]})") do |x|
+        options[:instances_per_team] = [x, 1].max
+    end
+    opts.on("--comm-bytes N", Integer, "Team communication buffer size in bytes (default: #{options[:comm_bytes]})") do |x|
+        options[:comm_bytes] = [x, 0].max
     end
     opts.on("-e", "--[no-]emit-signals", "Enable gem signals (default: #{options[:emit_signals]})") do |x|
         options[:emit_signals] = x
@@ -2716,6 +2763,7 @@ if bot_paths.size > 2
     exit 1
 end
 
+
 if options[:check_determinism]
     round_seed = Digest::SHA256.digest("#{options[:seed]}/check-determinism").unpack1('L<')
     seed_rng = PCG32.new(round_seed)
@@ -2732,7 +2780,7 @@ if options[:check_determinism]
             # allow for more time for bot startup and responses during determinism check
             runner.timeout_scale = 10.0
             runner.setup
-            runner.add_bot(path, bot_args[i] || [])
+            runner.add_team(path, 0, bot_args[i] || [])
             results, events = runner.run
             if checksum.nil?
                 checksum = results[0][:protocol_checksum]
@@ -2757,8 +2805,9 @@ if options[:rounds] == 1
     runner = Runner.new(**options)
     runner.stage_title = stage_title if stage_title
     runner.stage_key = stage_key if stage_key
+    runner.team_count = bot_paths.size
     runner.setup
-    bot_paths.each.with_index { |path, i| runner.add_bot(path, bot_args[i] || []) }
+    bot_paths.each.with_index { |path, i| runner.add_team(path, i, bot_args[i] || []) }
     results, events = runner.run
 
     if write_profile_json_path
@@ -2847,8 +2896,9 @@ else
         runner.round = i
         runner.stage_title = stage_title if stage_title
         runner.stage_key = stage_key if stage_key
+        runner.team_count = bot_paths.size
         runner.setup
-        bot_paths.each.with_index { |path, i| runner.add_bot(path, bot_args[i] || []) }
+        bot_paths.each.with_index { |path, i| runner.add_team(path, i, bot_args[i] || []) }
         if i == 0
             runner.bots.each.with_index do |bot, k|
                 bot_data << {:name => bot[:name], :emoji => bot[:emoji]}

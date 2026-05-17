@@ -134,7 +134,8 @@ stage-6@0.1:
     max_gems: 4..12
     emit_signals: true
     emit_signal_channels: true
-    signal_radius: 5..10
+    signal_radius: 2
+    signal_cutoff: 0.05
     vis_radius: 10..15
     signal_noise: 0
     signal_fade: 5..10
