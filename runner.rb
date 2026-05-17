@@ -1125,13 +1125,294 @@ class Runner
         str.gsub(/\e\[[0-9;]*[A-Za-z]/, '')
     end
 
+    def team_bot_indices(team)
+        (0...@bots.size).select { |i| @bots[i][:team] == team }
+    end
+
+    def team_bots(team)
+        team_bot_indices(team).map { |i| @bots[i] }
+    end
+
+    def team_representative(team)
+        team_bots(team).first || { :name => "Team #{team + 1}", :emoji => '🤖' }
+    end
+
+    def team_label(team, with_name: false)
+        bot = team_representative(team)
+        if with_name
+            "#{bot[:name]} #{bot[:emoji]}"
+        else
+            bot[:emoji]
+        end
+    end
+
+    def team_score(team)
+        team_bots(team).sum { |bot| bot[:disqualified_for] ? 0 : bot[:score] }
+    end
+
+    def score_summary
+        if @instances_per_team > 1
+            (0...@team_count).map { |team| "#{team_label(team)} #{team_score(team)}" }.join(' : ')
+        else
+            @bots.map { |bot| "#{bot[:emoji]} #{bot[:disqualified_for] ? 0 : bot[:score]}" }.join(' : ')
+        end
+    end
+
+    def team_disqualified_for(team)
+        reasons = team_bots(team).map { |bot| bot[:disqualified_for] }.compact.uniq
+        reasons.empty? ? nil : reasons.join(',')
+    end
+
+    def team_stderr_log(team)
+        lines = []
+        team_bot_indices(team).each do |i|
+            bot = @bots[i]
+            slot = bot[:slot] || 0
+            bot[:stderr_log].each do |line|
+                lines << "[slot #{slot}] #{line}"
+            end
+        end
+        lines
+    end
+
+    def team_tile_coverage(team)
+        seen = Set.new
+        team_bot_indices(team).each do |i|
+            seen.merge(@tiles_revealed[i] || Set.new)
+        end
+        return 0.0 if @floor_tiles_set.empty?
+        ((seen & @floor_tiles_set).size.to_f / @floor_tiles_set.size.to_f * 100.0 * 100).to_i.to_f / 100
+    end
+
+    def response_time_stats_for_bots(bots)
+        response_times = bots.flat_map { |bot| bot[:response_times] || [] }
+        first_response_time = response_times.size > 0 ? (response_times.first * 1e9).to_i : nil
+        remaining_response_times = response_times.map { |x| (x * 1e9).to_i }
+        remaining_response_times.shift if remaining_response_times.size > 0
+
+        {
+            :first => first_response_time,
+            :min => (remaining_response_times.size > 0 ? remaining_response_times.min : nil),
+            :median => (remaining_response_times.size > 0 ? remaining_response_times.sort[remaining_response_times.size / 2] : nil),
+            :max => (remaining_response_times.size > 0 ? remaining_response_times.max : nil),
+        }
+    end
+
+    def team_protocol_checksum(team)
+        protocols = team_bot_indices(team).map do |i|
+            {
+                :slot => @bots[i][:slot],
+                :protocol => @protocol[i]
+            }
+        end
+        Digest::SHA256.hexdigest(protocols.to_json)
+    end
+
+    def build_team_results(ttl_spawned, ticks_to_first_capture_by_team)
+        (0...@team_count).map do |team|
+            bots = team_bots(team)
+            score = team_score(team)
+            result = {
+                :score => score,
+                :ticks_to_first_capture => ticks_to_first_capture_by_team[team],
+                :disqualified_for => team_disqualified_for(team),
+                :response_time_stats => response_time_stats_for_bots(bots),
+                :stderr_log => team_stderr_log(team),
+            }
+            if @profile
+                result[:gem_utilization] = (ttl_spawned > 0 ? (score.to_f / ttl_spawned.to_f * 100.0 * 100).to_i.to_f / 100 : 0.0)
+                result[:tile_coverage] = team_tile_coverage(team)
+            end
+            if @check_determinism
+                result[:protocol_checksum] = team_protocol_checksum(team)
+            end
+            result
+        end
+    end
+
+    def team_order_for_tick(tick)
+        teams = (0...@team_count).to_a
+        return teams if teams.empty?
+        teams.rotate(tick % teams.size)
+    end
+
+    def bot_batches_for_tick(tick)
+        if @instances_per_team > 1
+            team_order = team_order_for_tick(tick)
+            (0...@instances_per_team).map do |slot|
+                team_order.map { |team| @bot_index_by_team_slot[[team, slot]] }.compact
+            end
+        else
+            return [[]] if @bots.empty?
+            [(0...@bots.size).to_a.rotate(tick % @bots.size)]
+        end
+    end
+
+    def parse_response_extra(json_text)
+        return nil if json_text.nil? || json_text.empty?
+        JSON.parse(json_text)
+    rescue JSON::ParserError
+        nil
+    end
+
+    def comm_byte(value)
+        value.to_i.clamp(0, 255)
+    rescue
+        0
+    end
+
+    def apply_comm_write(bot_index, extra)
+        return unless @comm_bytes > 0
+        return unless extra.is_a?(Hash)
+
+        team = @bots[bot_index][:team]
+        buffer = @team_buffers[team]
+        return unless buffer
+
+        if extra['comm'].is_a?(Array)
+            extra['comm'].first(@comm_bytes).each_with_index do |value, index|
+                buffer[index] = comm_byte(value)
+            end
+        end
+
+        if extra['comm_write'].is_a?(Hash)
+            extra['comm_write'].each do |key, value|
+                begin
+                    index = Integer(key)
+                rescue ArgumentError, TypeError
+                    next
+                end
+                next if index < 0 || index >= @comm_bytes
+                buffer[index] = comm_byte(value)
+            end
+        end
+    end
+
+    def collect_gems_for_initiative_order(initiative_order, ticks_to_first_capture_by_team, signal_level)
+        return if @tick >= @max_ticks
+        return if @gems.empty?
+
+        collected_gems = []
+        @gems.each.with_index do |gem, i|
+            collected_this_gem = false
+            initiative_order.each do |k|
+                bot = @bots[k]
+                next if bot.nil? || bot[:disqualified_for]
+
+                if bot[:position] == gem[:position]
+                    collected_this_gem = true
+                    collected_gems << i
+                    bot[:score] += gem[:ttl]
+                    ticks_to_first_capture_by_team[bot[:team]] ||= @tick
+
+                    if @announcer_enabled
+                        scorer = @instances_per_team > 1 ? team_label(bot[:team], with_name: true) : "#{bot[:name]} #{bot[:emoji]}"
+                        @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{scorer} scored a gem with #{gem[:ttl]} points!" }
+                        event = {
+                            tick: @tick,
+                            type: 'gem_collected',
+                            bot: k,
+                            team: bot[:team],
+                            delta: gem[:ttl],
+                            new_score: bot[:score],
+                            new_team_score: team_score(bot[:team]),
+                            position: gem[:position],
+                            id: gem[:id]
+                        }
+                        if @team_count == 2
+                            other_team = 1 - bot[:team]
+                            other_bot = team_bots(other_team).find { |b| b[:disqualified_for].nil? }
+                            event[:other_bot] = other_bot[:position] if other_bot
+                        end
+                        @events << event
+                    end
+                end
+
+                break if collected_this_gem
+            end
+        end
+
+        collected_gems.reverse.each do |i|
+            @gem_id_for_offset.delete(@gems[i][:position_offset])
+            if @emit_signal_channels
+                @channel_blocked_until[@gems[i][:channel]] = @tick + GEM_CHANNEL_COOLDOWN
+            end
+            @gems.delete_at(i)
+            signal_level.delete_at(i) if signal_level
+        end
+    end
+
+    def decay_gems
+        return if @tick >= @max_ticks
+
+        @gems.each do |gem|
+            gem[:ttl] -= 1
+            if gem[:ttl] <= 0
+                @events << { tick: @tick, type: 'gem_expired', position: gem[:position], id: gem[:id] }
+            end
+        end
+
+        @gems.each do |gem|
+            if gem[:ttl] <= 0
+                @gem_id_for_offset.delete(gem[:position_offset])
+                if @emit_signal_channels
+                    @channel_blocked_until[gem[:channel]] = @tick + GEM_CHANNEL_COOLDOWN
+                end
+            end
+        end
+
+        @gems.reject! do |gem|
+            gem[:ttl] <= 0
+        end
+    end
+
+    def announce_competitors
+        @chatlog << {emoji: ANNOUNCER_EMOJI, text: "Welcome to Hidden Gems!" }
+        @chatlog << {emoji: ANNOUNCER_EMOJI, text: "Today's stage is #{@stage_title} (v#{@stage_key.split('@').last})" }
+        @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@generator.capitalize} @ #{@width}x#{@height} with seed #{@seed.to_s(36)}" }
+
+        comments = COMMENT_SINGLE.dup
+        @rng.shuffle!(comments)
+
+        if @instances_per_team > 1
+            if @team_count == 1
+                @chatlog << {emoji: ANNOUNCER_EMOJI, text: "All eyes on our lone squad:" }
+            elsif @team_count == 2
+                @chatlog << {emoji: ANNOUNCER_EMOJI, text: "Two squads enter the maze:" }
+            else
+                @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@team_count} squads enter the maze:" }
+            end
+
+            (0...@team_count).each do |team|
+                @chatlog << {
+                    emoji: ANNOUNCER_EMOJI,
+                    text: "#{team_label(team, with_name: true)} deploys #{@instances_per_team} bot instances -- #{comments.shift}"
+                }
+            end
+        else
+            if @bots.size == 1
+                @chatlog << {emoji: ANNOUNCER_EMOJI, text: "All eyes on our lone contestant:" }
+            else
+                @chatlog << {emoji: ANNOUNCER_EMOJI, text: "Two bots enter the maze:" }
+            end
+
+            @bots.each do |bot|
+                @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{bot[:name]} #{bot[:emoji]} -- #{comments.shift}" }
+            end
+        end
+
+        if @team_count > 1
+            @chatlog << {emoji: ANNOUNCER_EMOJI, text: @rng.sample(COMMENT_VERSUS) }
+        end
+    end
+
     def render(tick, signal_level, paused, placed_antennas, placed_portals)
         fg_top_mix = mix_rgb_hex(UI_FOREGROUND_TOP, UI_BACKGROUND_TOP, 0.5)
         fg_bottom_mix = mix_rgb_hex(UI_FOREGROUND_BOTTOM, UI_BACKGROUND_BOTTOM, 0.5)
         StringIO.open do |io|
             io.print "\033[H" if @verbose >= 2
 
-            score_s = @bots.map { |x| "#{x[:emoji]} #{x[:disqualified_for] ? 0 : x[:score]}" }.join(' : ')
+            score_s = score_summary
 
             $timings.profile("render: upper status bar") do
                 status_line = [
@@ -1692,9 +1973,7 @@ class Runner
             rescue
             end
         end
-        results = @bots.map do |b|
-             { :ticks_to_first_capture => nil }
-        end
+        ticks_to_first_capture_by_team = Array.new(@team_count)
         @tiles_revealed = @bots.map do |b|
             Set.new()
         end
@@ -1714,27 +1993,16 @@ class Runner
         placed_portals = @bots.map { |b| (0...@max_portals).map { |i| [] } }
 
         @events = []
-        @events << { :type => 'match_start', :bots => @bots.map { |b| { name: b[:name], emoji: b[:emoji], position: b[:position] } } }
+        @events << {
+            :type => 'match_start',
+            :teams => (0...@team_count).map do |team|
+                bot = team_representative(team)
+                { name: bot[:name], emoji: bot[:emoji], score: 0 }
+            end,
+            :bots => @bots.map { |b| { name: b[:name], emoji: b[:emoji], team: b[:team], slot: b[:slot], position: b[:position] } }
+        }
         @protocol = @bots.map { |b| [] }
-        if @announcer_enabled
-            @chatlog << {emoji: ANNOUNCER_EMOJI, text: "Welcome to Hidden Gems!" }
-            @chatlog << {emoji: ANNOUNCER_EMOJI, text: "Today's stage is #{@stage_title} (v#{@stage_key.split('@').last})" }
-            @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@generator.capitalize} @ #{@width}x#{@height} with seed #{@seed.to_s(36)}" }
-            if @bots.size == 1
-                @chatlog << {emoji: ANNOUNCER_EMOJI, text: "All eyes on our lone contestant:" }
-            else
-                @chatlog << {emoji: ANNOUNCER_EMOJI, text: "Two bots enter the maze:" }
-            end
-            comments = COMMENT_SINGLE.dup
-
-            @rng.shuffle!(comments)
-            @bots.each.with_index do |bot, i|
-                @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{bot[:name]} #{bot[:emoji]} -- #{comments.shift}" }
-            end
-            if @bots.size > 1
-                @chatlog << {emoji: ANNOUNCER_EMOJI, text: @rng.sample(COMMENT_VERSUS) }
-            end
-        end
+        announce_competitors if @announcer_enabled
         frames = []
         @paused = @start_paused
         break_on_tick = nil
@@ -1805,13 +2073,14 @@ class Runner
 
                     if @tick == @max_ticks
                         if @announcer_enabled
-                            if @bots.size == 1
+                            if @team_count == 1
                                 @chatlog << {emoji: ANNOUNCER_EMOJI, text: "Mission complete after #{@max_ticks} ticks." }
                             else
-                                if @bots[0][:score] != @bots[1][:score]
-                                    @chatlog << {emoji: ANNOUNCER_EMOJI, text: "Duel ends after #{@max_ticks} ticks (one stands tall, one blames RNG)." }
-                                else
+                                team_scores = (0...@team_count).map { |team| team_score(team) }
+                                if team_scores.uniq.size == 1
                                     @chatlog << {emoji: ANNOUNCER_EMOJI, text: "Duel ends in a draw after #{@max_ticks} ticks." }
+                                else
+                                    @chatlog << {emoji: ANNOUNCER_EMOJI, text: "Duel ends after #{@max_ticks} ticks (one squad stands tall, one blames RNG)." }
                                 end
                             end
                         end
@@ -1873,290 +2142,360 @@ class Runner
                         @pause_requested = false
                     end
 
-                    bot_with_initiative = @tick % @bots.size
-
-                    # --- STEP 3: QUERY BOTS in parallel: send data to all, then read one line from each ---
+                    # --- STEP 3: QUERY BOTS ---
+                    #
+                    # Normal stages keep the old model: all bots receive the same
+                    # start-of-tick snapshot and responses are resolved by initiative.
+                    #
+                    # Multi-instance team stages are split into slot batches:
+                    #   A0/B0, then A1/B1, then A2/B2, ...
+                    # Bots in one batch receive the same world snapshot. After the
+                    # batch is resolved, later slots see the updated world and the
+                    # updated team communication buffer.
 
                     next if @tick == @max_ticks
                     @stdout_buffers ||= Array.new(@bots.size) { "" }
 
-                    bot_with_initiative = @tick % @bots.size
+                    bot_batches = bot_batches_for_tick(@tick)
+                    bot_batches.each do |batch_order|
+                        batch_order = batch_order.select { |i| !i.nil? && i >= 0 && i < @bots.size }
+                        next if batch_order.empty?
 
-                    # 3a) PREPARE DATA for each bot
-                    prepared = Array.new(@bots.size)
-                    (0...@bots.size).each do |i|
-                        bot = @bots[i]
-                        next if bot[:disqualified_for]
+                        # 3a) PREPARE DATA for this initiative batch
+                        prepared = {}
+                        batch_order.each do |i|
+                            bot = @bots[i]
+                            next if bot[:disqualified_for]
 
-                        data = {}
-                        $timings.profile("prepare data") do
-                            if @tick == 0
-                                data[:config] = {}
-                                OPTIONS_FOR_BOT.each do |key|
-                                    data[:config][key.to_sym] = instance_variable_get("@#{key}")
-                                end
-                                dk = OpenSSL::PKCS5.pbkdf2_hmac("#{@seed}/bot/#{i}", "scrim:v1:#{@seed}", 200_000, 4, "sha256")
-                                bot_seed = dk.unpack1("L<")
-                                data[:config][:bot_seed] = bot_seed
-                                data[:config][:team] = bot[:team]
-                                data[:config][:slot] = bot[:slot]
-                                data[:config][:team_count] = @team_count
-                                data[:config][:instances_per_team] = @instances_per_team
-                                data[:config][:comm_bytes] = @comm_bytes
-                            end
-                            data[:tick] = @tick
-                            data[:team] = bot[:team]
-                            data[:slot] = bot[:slot]
-                            data[:team_size] = @instances_per_team
-                            data[:team_buffer] = @team_buffers[bot[:team]].dup if @comm_bytes > 0
-                            data[:bot] = bot[:position]
-                            data[:wall] = []
-                            data[:floor] = []
-                            if @max_antennas > 0
-                                data[:antennas] = []
-                            end
-                            if @max_portals > 0
-                                data[:portals] = []
-                                data[:portal_stubs] = []
-                            end
-
-                            data[:initiative] = (bot_with_initiative == i)
-                            data[:visible_gems] = []
-                            vis_key = (bot[:position][1] << 16) | bot[:position][0]
-                            @visibility[vis_key].each do |t|
-                                key = @maze.include?(t) ? :wall : :floor
-                                data[key] << [t & 0xFFFF, t >> 16]
-                                if @max_antennas > 0
-                                    if placed_antennas.any? { |x| x.include?(t) }
-                                        data[:antennas] << [t & 0xFFFF, t >> 16]
+                            data = {}
+                            $timings.profile("prepare data") do
+                                if @tick == 0
+                                    data[:config] = {}
+                                    OPTIONS_FOR_BOT.each do |key|
+                                        data[:config][key.to_sym] = instance_variable_get("@#{key}")
                                     end
+                                    dk = OpenSSL::PKCS5.pbkdf2_hmac("#{@seed}/bot/#{i}", "scrim:v1:#{@seed}", 200_000, 4, "sha256")
+                                    bot_seed = dk.unpack1("L<")
+                                    data[:config][:bot_seed] = bot_seed
+                                    data[:config][:team] = bot[:team]
+                                    data[:config][:slot] = bot[:slot]
+                                    data[:config][:team_count] = @team_count
+                                    data[:config][:instances_per_team] = @instances_per_team
+                                    data[:config][:comm_bytes] = @comm_bytes
+                                end
+                                data[:tick] = @tick
+                                data[:team] = bot[:team]
+                                data[:slot] = bot[:slot]
+                                data[:team_size] = @instances_per_team
+                                data[:phase] = bot[:slot]
+                                data[:team_buffer] = @team_buffers[bot[:team]].dup if @comm_bytes > 0
+                                data[:bot] = bot[:position]
+                                data[:wall] = []
+                                data[:floor] = []
+                                if @max_antennas > 0
+                                    data[:antennas] = []
                                 end
                                 if @max_portals > 0
-                                    placed_portals.each.with_index do |portals_for_bot, bot_index|
-                                        portals_for_bot.each.with_index do |portal_pair, portal_index|
-                                            portal_pair.each do |portal|
-                                                if portal[0] == t
-                                                    if portal_pair.size == 2
-                                                        data[:portals] << [t & 0xFFFF, t >> 16]
-                                                    else
-                                                        data[:portal_stubs] << [t & 0xFFFF, t >> 16]
+                                    data[:portals] = []
+                                    data[:portal_stubs] = []
+                                end
+
+                                data[:initiative] = (batch_order.first == i)
+                                data[:visible_gems] = []
+                                vis_key = (bot[:position][1] << 16) | bot[:position][0]
+                                @visibility[vis_key].each do |t|
+                                    key = @maze.include?(t) ? :wall : :floor
+                                    data[key] << [t & 0xFFFF, t >> 16]
+                                    if @max_antennas > 0
+                                        if placed_antennas.any? { |x| x.include?(t) }
+                                            data[:antennas] << [t & 0xFFFF, t >> 16]
+                                        end
+                                    end
+                                    if @max_portals > 0
+                                        placed_portals.each.with_index do |portals_for_bot, bot_index|
+                                            portals_for_bot.each.with_index do |portal_pair, portal_index|
+                                                portal_pair.each do |portal|
+                                                    if portal[0] == t
+                                                        if portal_pair.size == 2
+                                                            data[:portals] << [t & 0xFFFF, t >> 16]
+                                                        else
+                                                            data[:portal_stubs] << [t & 0xFFFF, t >> 16]
+                                                        end
                                                     end
                                                 end
                                             end
                                         end
                                     end
+                                    @gems.each do |gem|
+                                        if gem[:position_offset] == t
+                                            data[:visible_gems] << { :position => gem[:position], :ttl => gem[:ttl] }
+                                        end
+                                    end
                                 end
-                                @gems.each do |gem|
-                                    if gem[:position_offset] == t
-                                        data[:visible_gems] << { :position => gem[:position], :ttl => gem[:ttl] }
+                                if @emit_signals
+                                    level_sum = 0.0
+                                    @gems.each_with_index do |gem, gi|
+                                        level_sum += (signal_level[gi][vis_key] || 0.0)
+                                    end
+                                    data[:signal_level] = format("%.6f", level_sum).to_f
+                                    if @emit_signal_channels
+                                        data[:channels] = (0...@max_gems).map { |c| 0.0 }
+                                        @gems.each.with_index do |g, gi|
+                                            channel = g[:channel]
+                                            level = signal_level[gi][vis_key] || 0.0
+                                            data[:channels][channel] = format("%.6f", level).to_f
+                                        end
+                                    end
+                                    if @max_antennas > 0
+                                        data[:antenna_signals] = []
+                                        placed_antennas[i].each do |a|
+                                            ax = a & 0xFFFF
+                                            ay = a >> 16
+                                            signal = signal_level.each_with_index.map { |l, gi| l[a] || 0.0 }.sum
+                                            data[:antenna_signals] << { :position => [ax, ay], :signal => format("%.6f", signal).to_f }
+                                        end
+                                    end
+                                end
+                                if @bots.size > 1
+                                    data[:visible_bots] = []
+                                    (0...@bots.size).each do |j|
+                                        next if j == i
+                                        other = @bots[j]
+                                        next if other[:disqualified_for]
+                                        bx, by = other[:position]
+                                        if @visibility[vis_key].include?((by << 16) | bx)
+                                            data[:visible_bots] << {
+                                                :position => other[:position],
+                                                :emoji => other[:emoji],
+                                                :team => other[:team],
+                                                :slot => other[:slot],
+                                                :teammate => (other[:team] == bot[:team])
+                                            }
+                                        end
                                     end
                                 end
                             end
-                            if @emit_signals
-                                level_sum = 0.0
-                                @gems.each_with_index do |gem, gi|
-                                    level_sum += (signal_level[gi][vis_key] || 0.0)
-                                end
-                                data[:signal_level] = format("%.6f", level_sum).to_f
-                                if @emit_signal_channels
-                                    data[:channels] = (0...@max_gems).map { |c| 0.0 }
-                                    @gems.each.with_index do |g, gi|
-                                        channel = g[:channel]
-                                        level = signal_level[gi][vis_key] || 0.0
-                                        data[:channels][channel] = format("%.6f", level).to_f
-                                    end
-                                end
-                                if @max_antennas > 0
-                                    data[:antenna_signals] = []
-                                    placed_antennas[i].each do |a|
-                                        ax = a & 0xFFFF
-                                        ay = a >> 16
-                                        signal = signal_level.each_with_index.map { |l, gi| l[a] || 0.0 }.sum
-                                        data[:antenna_signals] << { :position => [ax, ay], :signal => format("%.6f", signal).to_f }
-                                    end
-                                end
-                            end
-                            if @bots.size > 1
-                                data[:visible_bots] = []
-                                (0...@bots.size).each do |j|
-                                    next if j == i
-                                    other = @bots[j]
-                                    next if other[:disqualified_for]
-                                    bx, by = other[:position]
-                                    if @visibility[vis_key].include?((by << 16) | bx)
-                                        data[:visible_bots] << { :position => other[:position], :emoji => other[:emoji] }
-                                    end
-                                end
-                            end
-                        end
 
-                        prepared[i] = data
-                        @protocol[i] ||= []
-                        @protocol[i].last[:bots] ||= {}
-                        @protocol[i].last[:bots][:data] = data
-                        if @ansi_log_path && @write_stdin
-                            @ansi_log.last[:stdin] = data
-                        end
-                    end
-
-                    # 3b) WRITE PHASE: send to all eligible bots first
-                    start_mono   = {}
-                    deadline_mono = {}
-                    received_mono = {}
-                    write_limit = (@tick == 0 ? HARD_LIMIT_FIRST_TICK : HARD_LIMIT) * @timeout_scale
-                    (0...@bots.size).each do |_k|
-                        i = (_k + bot_with_initiative) % @bots.size
-                        next if @bots[i][:disqualified_for] || prepared[i].nil?
-                        $timings.profile("write to bot's stdin") do
-                            begin
-                                @bots_io[i].stdin.puts(prepared[i].to_json)
-                                @bots_io[i].stdin.flush
-                                # Start the response timer only after the input has actually been delivered.
-                                start_mono[i]    = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-                                deadline_mono[i] = start_mono[i] + write_limit
-                            rescue Errno::EPIPE
-                                if @bots[i][:disqualified_for].nil?
-                                    @bots[i][:disqualified_for] = 'terminated_unexpectedly'
-                                    @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} has terminated unexpectedly!" } if @announcer_enabled
-                                    @events << { tick: @tick, type: 'terminated_unexpectedly', bot: i }
-                                end
+                            prepared[i] = data
+                            @protocol[i] ||= []
+                            @protocol[i].last[:bots] ||= {}
+                            @protocol[i].last[:bots][:data] = data
+                            if @ansi_log_path && @write_stdin
+                                @ansi_log.last[:stdin] = data
                             end
                         end
-                    end
 
-                    # 3c) READ PHASE: multiplex all stdout until we have one line per responding bot or they time out/EOF
-                    pending = (0...@bots.size).select { |i| prepared[i] && @bots[i][:disqualified_for].nil? }
-                    stdout_map = {}
-                    read_ios = []
-                    pending.each do |i|
-                        io = @bots_io[i].stdout
-                        read_ios << io
-                        stdout_map[io] = i
-                    end
-
-                    responses = {} # i => line (String)
-                    $timings.profile("read responses") do
-                        loop do
-                            break if read_ios.empty?
-
-                            # compute shortest remaining deadline for select timeout
-                            now_mono = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-                            min_remaining = pending.map { |i| [deadline_mono[i] - now_mono, 0.0].max }.min
-                            # if any already timed out, skip waiting
-                            min_remaining = 0.0 if pending.any? { |i| now_mono >= deadline_mono[i] }
-
-                            ready, = IO.select(read_ios, nil, nil, min_remaining)
-                            ready ||= []
-
-                            # Always drain any ready stdout first; otherwise a bot can be falsely hard-timed-out
-                            # simply because the runner was busy with other bots.
-                            ready.each do |io|
-                                i = stdout_map[io]
-                                next unless pending.include?(i)
-                                chunk = io.read_nonblock(4096, exception: false)
-                                case chunk
-                                when :wait_readable
-                                    # no data yet
-                                when nil
-                                    # EOF
+                        # 3b) WRITE PHASE: send this batch to all eligible bots first
+                        start_mono   = {}
+                        deadline_mono = {}
+                        received_mono = {}
+                        write_limit = (@tick == 0 ? HARD_LIMIT_FIRST_TICK : HARD_LIMIT) * @timeout_scale
+                        batch_order.each do |i|
+                            next if @bots[i][:disqualified_for] || prepared[i].nil?
+                            $timings.profile("write to bot's stdin") do
+                                begin
+                                    @bots_io[i].stdin.puts(prepared[i].to_json)
+                                    @bots_io[i].stdin.flush
+                                    # Start the response timer only after the input has actually been delivered.
+                                    start_mono[i]    = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+                                    deadline_mono[i] = start_mono[i] + write_limit
+                                rescue Errno::EPIPE
                                     if @bots[i][:disqualified_for].nil?
                                         @bots[i][:disqualified_for] = 'terminated_unexpectedly'
                                         @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} has terminated unexpectedly!" } if @announcer_enabled
                                         @events << { tick: @tick, type: 'terminated_unexpectedly', bot: i }
                                     end
-                                    read_ios.delete(io)
-                                    pending.delete(i)
-                                else
-                                    @stdout_buffers[i] << chunk
-                                    # extract one line if present (keep remainder for next tick)
-                                    if (nl = @stdout_buffers[i].index("\n"))
-                                        line = @stdout_buffers[i].slice!(0..nl).strip
-                                        responses[i] = line
-                                        received_mono[i] = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+                                end
+                            end
+                        end
+
+                        # 3c) READ PHASE: multiplex this batch until we have one line per responding bot or they time out/EOF
+                        pending = batch_order.select { |i| prepared[i] && @bots[i][:disqualified_for].nil? }
+                        stdout_map = {}
+                        read_ios = []
+                        pending.each do |i|
+                            io = @bots_io[i].stdout
+                            read_ios << io
+                            stdout_map[io] = i
+                        end
+
+                        responses = {} # i => line (String)
+                        $timings.profile("read responses") do
+                            loop do
+                                break if read_ios.empty?
+
+                                # compute shortest remaining deadline for select timeout
+                                now_mono = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+                                min_remaining = pending.map { |i| [deadline_mono[i] - now_mono, 0.0].max }.min
+                                # if any already timed out, skip waiting
+                                min_remaining = 0.0 if pending.any? { |i| now_mono >= deadline_mono[i] }
+
+                                ready, = IO.select(read_ios, nil, nil, min_remaining)
+                                ready ||= []
+
+                                # Always drain any ready stdout first; otherwise a bot can be falsely hard-timed-out
+                                # simply because the runner was busy with other bots.
+                                ready.each do |io|
+                                    i = stdout_map[io]
+                                    next unless pending.include?(i)
+                                    chunk = io.read_nonblock(4096, exception: false)
+                                    case chunk
+                                    when :wait_readable
+                                        # no data yet
+                                    when nil
+                                        # EOF
+                                        if @bots[i][:disqualified_for].nil?
+                                            @bots[i][:disqualified_for] = 'terminated_unexpectedly'
+                                            @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} has terminated unexpectedly!" } if @announcer_enabled
+                                            @events << { tick: @tick, type: 'terminated_unexpectedly', bot: i }
+                                        end
+                                        read_ios.delete(io)
+                                        pending.delete(i)
+                                    else
+                                        @stdout_buffers[i] << chunk
+                                        # extract one line if present (keep remainder for next tick)
+                                        if (nl = @stdout_buffers[i].index("\n"))
+                                            line = @stdout_buffers[i].slice!(0..nl).strip
+                                            responses[i] = line
+                                            received_mono[i] = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+                                            read_ios.delete(io)
+                                            pending.delete(i)
+                                        end
+                                    end
+                                end
+
+                                # Now mark hard timeouts for bots still pending without a full line.
+                                now_mono = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+                                pending.dup.each do |i|
+                                    if now_mono >= deadline_mono[i] && !responses.key?(i)
+                                        if @bots[i][:disqualified_for].nil?
+                                            @bots[i][:disqualified_for] = "hard_timeout"
+                                            elapsed = now_mono - start_mono[i]
+                                            if @announcer_enabled
+                                                @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} took too long to respond (#{(elapsed * 1000).to_i} ms) and has been terminated!" }
+                                                @events << { tick: @tick, type: 'hard_timeout', bot: i }
+                                            end
+                                        end
+                                        io = @bots_io[i].stdout
                                         read_ios.delete(io)
                                         pending.delete(i)
                                     end
                                 end
                             end
-
-                            # Now mark hard timeouts for bots still pending without a full line.
-                            now_mono = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-                            pending.dup.each do |i|
-                                if now_mono >= deadline_mono[i] && !responses.key?(i)
-                                    if @bots[i][:disqualified_for].nil?
-                                        @bots[i][:disqualified_for] = "hard_timeout"
-                                        elapsed = now_mono - start_mono[i]
-                                        if @announcer_enabled
-                                            @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} took too long to respond (#{(elapsed * 1000).to_i} ms) and has been terminated!" }
-                                            @events << { tick: @tick, type: 'hard_timeout', bot: i }
-                                        end
-                                    end
-                                    io = @bots_io[i].stdout
-                                    read_ios.delete(io)
-                                    pending.delete(i)
-                                end
-                            end
                         end
-                    end
 
-                    # 3d) PROCESS RESPONSES in initiative order
-                    $timings.profile("process bot responses") do
-                        (0...@bots.size).each do |_k|
-                            i = (_k + bot_with_initiative) % @bots.size
-                            next if prepared[i].nil?
-                            next if @bots[i][:disqualified_for]
+                        # 3d) PROCESS RESPONSES in initiative order for this batch
+                        $timings.profile("process bot responses") do
+                            batch_order.each do |i|
+                                next if prepared[i].nil?
+                                next if @bots[i][:disqualified_for]
 
-                            line = responses[i]
-                            if line.nil?
-                                # already disqualified above (timeout/EOF)
-                                next
-                            end
-
-                            # Use the moment we actually received this bot's newline-terminated response.
-                            # Otherwise a slow opponent inflates everyone's "elapsed" (and overtime).
-                            recv_t = received_mono[i] || Process.clock_gettime(Process::CLOCK_MONOTONIC)
-                            elapsed = recv_t - start_mono[i]
-                            @bots[i][:response_times] << elapsed
-                            overtime = (@tick == 0 || @check_determinism) ? 0.0 : (elapsed - SOFT_LIMIT * @timeout_scale)
-                            @bots[i][:overtime_used] += overtime if overtime > 0.0
-                            if @announcer_enabled && overtime.to_f > 0.0
-                                @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} exceeded soft limit by #{(overtime * 1e3).to_i} ms (total overtime: #{(@bots[i][:overtime_used] * 1e3).to_i} ms)" }
-                                @events << { tick: @tick, type: 'overtime', bot: i, overtime: overtime.to_f, total_overtime: @bots[i][:overtime_used].to_f }
-                            end
-                            if @bots[i][:overtime_used] > OVERTIME_BUDGET * @timeout_scale
-                                if @bots[i][:disqualified_for].nil?
-                                    @bots[i][:disqualified_for] = 'overtime_budget_exceeded'
-                                    @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} has exceeded their overtime budget and is disqualified!" } if @announcer_enabled
-                                    @events << { tick: @tick, type: 'overtime_budget_exceeded', bot: i }
+                                line = responses[i]
+                                if line.nil?
+                                    # already disqualified above (timeout/EOF)
+                                    next
                                 end
-                            end
 
-                            command = (line.split(' ').first || '').strip
-                            debug_json = line[command.length..-1]&.strip
-                            @protocol[i].last[:bots][:response] = command
-                            if (!@check_determinism) && (!@contest_mode)
-                                @protocol[i].last[:bots][:debug_json] = debug_json
-                                if @verbose >= 2
-                                    begin
-                                        debug_data = JSON.parse(debug_json)
-                                        if debug_data['command'] == 'pause'
-                                            @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} requested a pause." }
-                                            @pause_requested = true
-                                        end
-                                    rescue
+                                # Use the moment we actually received this bot's newline-terminated response.
+                                # Otherwise a slow opponent inflates everyone's "elapsed" (and overtime).
+                                recv_t = received_mono[i] || Process.clock_gettime(Process::CLOCK_MONOTONIC)
+                                elapsed = recv_t - start_mono[i]
+                                @bots[i][:response_times] << elapsed
+                                overtime = (@tick == 0 || @check_determinism) ? 0.0 : (elapsed - SOFT_LIMIT * @timeout_scale)
+                                @bots[i][:overtime_used] += overtime if overtime > 0.0
+                                if @announcer_enabled && overtime.to_f > 0.0
+                                    @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} exceeded soft limit by #{(overtime * 1e3).to_i} ms (total overtime: #{(@bots[i][:overtime_used] * 1e3).to_i} ms)" }
+                                    @events << { tick: @tick, type: 'overtime', bot: i, overtime: overtime.to_f, total_overtime: @bots[i][:overtime_used].to_f }
+                                end
+                                if @bots[i][:overtime_used] > OVERTIME_BUDGET * @timeout_scale
+                                    if @bots[i][:disqualified_for].nil?
+                                        @bots[i][:disqualified_for] = 'overtime_budget_exceeded'
+                                        @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} has exceeded their overtime budget and is disqualified!" } if @announcer_enabled
+                                        @events << { tick: @tick, type: 'overtime_budget_exceeded', bot: i }
                                     end
                                 end
-                            end
 
-                            bot_position = @bots[i][:position]
-                            prev_bot_position = bot_position.dup
-                            dir = {'N'=>[0,-1],'E'=>[1,0],'S'=>[0,1],'W'=>[-1,0]}
-                            if command =~ /^[NESW]$/
-                                # move NESW
-                                dx = bot_position[0] + dir[command][0]
-                                dy = bot_position[1] + dir[command][1]
-                                if dx >= 0 && dy >= 0 && dx < @width && dy < @height
-                                    if (!@maze.include?((dy << 16) | dx))
+                                command = (line.split(' ').first || '').strip
+                                debug_json = line[command.length..-1]&.strip
+                                extra_data = parse_response_extra(debug_json)
+                                @protocol[i].last[:bots][:response] = command
+                                if (!@check_determinism) && (!@contest_mode)
+                                    @protocol[i].last[:bots][:debug_json] = debug_json
+                                    if @verbose >= 2
+                                        begin
+                                            debug_data = extra_data || JSON.parse(debug_json)
+                                            if debug_data['command'] == 'pause'
+                                                @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} requested a pause." }
+                                                @pause_requested = true
+                                            end
+                                        rescue
+                                        end
+                                    end
+                                end
+
+                                bot_position = @bots[i][:position]
+                                prev_bot_position = bot_position.dup
+                                dir = {'N'=>[0,-1],'E'=>[1,0],'S'=>[0,1],'W'=>[-1,0]}
+                                if command =~ /^[NESW]$/
+                                    # move NESW
+                                    dx = bot_position[0] + dir[command][0]
+                                    dy = bot_position[1] + dir[command][1]
+                                    if dx >= 0 && dy >= 0 && dx < @width && dy < @height
+                                        if (!@maze.include?((dy << 16) | dx))
+                                            target_occupied_by_bot = nil
+                                            (0...@bots.size).each do |other|
+                                                next if other == i
+                                                next if @bots[other][:disqualified_for]
+                                                if @bots[other][:position] == [dx, dy]
+                                                    target_occupied_by_bot = other
+                                                    break
+                                                end
+                                            end
+                                            if target_occupied_by_bot.nil?
+                                                old_offset = (bot_position[1] << 16) | bot_position[0]
+                                                @bot_id_for_offset.delete(old_offset)
+                                                @bots[i][:position] = [dx, dy]
+                                                new_offset = (dy << 16) | dx
+                                                @bot_id_for_offset[new_offset] = i
+                                            end
+                                        elsif @max_portals > 0
+                                            # check for portal
+                                            placed_portals.each_with_index do |portals_for_bot, bot_index|
+                                                portals_for_bot.each_with_index do |portal_pair, portal_index|
+                                                    portal_pair.each.with_index do |portal, portal_half_index|
+                                                        if portal[0] == ((dy << 16) | dx)
+                                                            # teleport to other half if exists, otherwise ignore move
+                                                            if portal_pair.size == 2
+                                                                other_half = portal_pair[1 - portal_half_index]
+                                                                other_half_x = other_half[1] & 0xFFFF
+                                                                other_half_y = other_half[1] >> 16
+                                                                target_occupied_by_bot = nil
+                                                                (0...@bots.size).each do |other|
+                                                                    next if other == i
+                                                                    next if @bots[other][:disqualified_for]
+                                                                    if @bots[other][:position] == [other_half_x, other_half_y]
+                                                                        target_occupied_by_bot = other
+                                                                        break
+                                                                    end
+                                                                end
+                                                                old_offset = (@bots[i][:position][1] << 16) | @bots[i][:position][0]
+                                                                @bot_id_for_offset.delete(old_offset)
+                                                                @bots[i][:position] = [other_half_x, other_half_y] if target_occupied_by_bot.nil?
+                                                                new_offset = (other_half_y << 16) | other_half_x
+                                                                @bot_id_for_offset[new_offset] = i
+                                                            end
+                                                        end
+                                                    end
+                                                end
+                                            end
+                                        end
+                                    end
+                                elsif @max_antennas > 0 && command =~ /^PA[NESW]$/
+                                    # Place Antenna NESW
+                                    dx = bot_position[0] + dir[command[2]][0]
+                                    dy = bot_position[1] + dir[command[2]][1]
+                                    if dx >= 0 && dy >= 0 && dx < @width && dy < @height
+                                        offset = (dy << 16) | dx
                                         target_occupied_by_bot = nil
                                         (0...@bots.size).each do |other|
                                             next if other == i
@@ -2166,188 +2505,90 @@ class Runner
                                                 break
                                             end
                                         end
-                                        if target_occupied_by_bot.nil?
-                                            old_offset = (bot_position[1] << 16) | bot_position[0]
-                                            @bot_id_for_offset.delete(old_offset)
-                                            @bots[i][:position] = [dx, dy]
-                                            new_offset = (dy << 16) | dx
-                                            @bot_id_for_offset[new_offset] = i
+                                        target_occupied_by_gem = nil
+                                        @gems.each_with_index do |gem, gi|
+                                            if gem[:position] == [dx, dy]
+                                                target_occupied_by_gem = gi
+                                                break
+                                            end
                                         end
-                                    elsif @max_portals > 0
-                                        # check for portal
-                                        placed_portals.each_with_index do |portals_for_bot, bot_index|
-                                            portals_for_bot.each_with_index do |portal_pair, portal_index|
-                                                portal_pair.each.with_index do |portal, portal_half_index|
-                                                    if portal[0] == ((dy << 16) | dx)
-                                                        # teleport to other half if exists, otherwise ignore move
-                                                        if portal_pair.size == 2
-                                                            other_half = portal_pair[1 - portal_half_index]
-                                                            other_half_x = other_half[1] & 0xFFFF
-                                                            other_half_y = other_half[1] >> 16
-                                                            target_occupied_by_bot = nil
-                                                            (0...@bots.size).each do |other|
-                                                                next if other == i
-                                                                next if @bots[other][:disqualified_for]
-                                                                if @bots[other][:position] == [other_half_x, other_half_y]
-                                                                    target_occupied_by_bot = other
-                                                                    break
-                                                                end
+                                        target_occupied_by_antenna = placed_antennas.any? { |x| x.include?(offset) }
+                                        if @maze.include?(offset) && target_occupied_by_bot.nil? && target_occupied_by_gem.nil? && !target_occupied_by_antenna && antenna_stock[i] > 0
+                                            antenna_stock[i] -= 1
+                                            placed_antennas[i] << offset
+                                            @maze << offset
+                                            if @announcer_enabled
+                                                @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} placed an antenna (#{antenna_stock[i]} antenna#{antenna_stock[i] == 1 ? '' : 's'} remaining)." }
+                                                @events << { tick: @tick, type: 'antenna_placed', bot: i, position: [dx, dy], remaining_stock: antenna_stock[i] }
+                                            end
+                                        end
+                                    end
+                                elsif @max_portals > 0 && command =~ /^P[1-4][NESW]$/
+                                    # Place Portal 1-4 NESW
+                                    portal_id = command[1].to_i - 1
+                                    if portal_id >= 0 && portal_id < @max_portals
+                                        dx = bot_position[0] + dir[command[2]][0]
+                                        dy = bot_position[1] + dir[command[2]][1]
+                                        if dx >= 0 && dy >= 0 && dx < @width && dy < @height
+                                            offset = (dy << 16) | dx
+                                            # target must be on wall
+                                            if @maze.include?(offset)
+                                                # target must not be part of another portal (complete or incomplete)
+                                                occupied = false
+                                                placed_portals.each do |portals_for_bot|
+                                                    portals_for_bot.each do |portal_pair|
+                                                        portal_pair.each do |portal|
+                                                            if portal.include?(offset)
+                                                                occupied = true
+                                                                break
                                                             end
-                                                            old_offset = (@bots[i][:position][1] << 16) | @bots[i][:position][0]
-                                                            @bot_id_for_offset.delete(old_offset)
-                                                            @bots[i][:position] = [other_half_x, other_half_y] if target_occupied_by_bot.nil?
-                                                            new_offset = (other_half_y << 16) | other_half_x
-                                                            @bot_id_for_offset[new_offset] = i
                                                         end
                                                     end
+                                                    break if occupied
                                                 end
-                                            end
-                                        end
-                                    end
-                                end
-                            elsif @max_antennas > 0 && command =~ /^PA[NESW]$/
-                                # Place Antenna NESW
-                                dx = bot_position[0] + dir[command[2]][0]
-                                dy = bot_position[1] + dir[command[2]][1]
-                                if dx >= 0 && dy >= 0 && dx < @width && dy < @height
-                                    offset = (dy << 16) | dx
-                                    target_occupied_by_bot = nil
-                                    (0...@bots.size).each do |other|
-                                        next if other == i
-                                        next if @bots[other][:disqualified_for]
-                                        if @bots[other][:position] == [dx, dy]
-                                            target_occupied_by_bot = other
-                                            break
-                                        end
-                                    end
-                                    target_occupied_by_gem = nil
-                                    @gems.each_with_index do |gem, gi|
-                                        if gem[:position] == [dx, dy]
-                                            target_occupied_by_gem = gi
-                                            break
-                                        end
-                                    end
-                                    target_occupied_by_antenna = placed_antennas.any? { |x| x.include?(offset) }
-                                    if @maze.include?(offset) && target_occupied_by_bot.nil? && target_occupied_by_gem.nil? && !target_occupied_by_antenna && antenna_stock[i] > 0
-                                        antenna_stock[i] -= 1
-                                        placed_antennas[i] << offset
-                                        @maze << offset
-                                        if @announcer_enabled
-                                            @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} placed an antenna (#{antenna_stock[i]} antenna#{antenna_stock[i] == 1 ? '' : 's'} remaining)." }
-                                            @events << { tick: @tick, type: 'antenna_placed', bot: i, position: [dx, dy], remaining_stock: antenna_stock[i] }
-                                        end
-                                    end
-                                end
-                            elsif @max_portals > 0 && command =~ /^P[1-4][NESW]$/
-                                # Place Portal 1-4 NESW
-                                portal_id = command[1].to_i - 1
-                                if portal_id >= 0 && portal_id < @max_portals
-                                    dx = bot_position[0] + dir[command[2]][0]
-                                    dy = bot_position[1] + dir[command[2]][1]
-                                    if dx >= 0 && dy >= 0 && dx < @width && dy < @height
-                                        offset = (dy << 16) | dx
-                                        # target must be on wall
-                                        if @maze.include?(offset)
-                                            # target must not be part of another portal (complete or incomplete)
-                                            occupied = false
-                                            placed_portals.each do |portals_for_bot|
-                                                portals_for_bot.each do |portal_pair|
-                                                    portal_pair.each do |portal|
-                                                        if portal.include?(offset)
-                                                            occupied = true
-                                                            break
-                                                        end
-                                                    end
-                                                end
-                                                break if occupied
-                                            end
-                                            unless occupied
-                                                # each portal can have at most 2 placements (entrance and exit)
-                                                if placed_portals[i][portal_id].size < 2
-                                                    # prepare entry with portal offset and bot position at time of placement
-                                                    entry = [offset, (bot_position[1] << 16) | bot_position[0]]
-                                                    placed_portals[i][portal_id] << entry
-                                                    if placed_portals[i][portal_id].size == 1
-                                                        @events << { tick: @tick, type: 'portal_half_placed', bot: i, portal_id: portal_id, position: [dx, dy] }
-                                                    else
-                                                        @events << { tick: @tick, type: 'portal_completed', bot: i, portal_id: portal_id, position: [dx, dy] }
-                                                    end
-                                                    if @announcer_enabled
+                                                unless occupied
+                                                    # each portal can have at most 2 placements (entrance and exit)
+                                                    if placed_portals[i][portal_id].size < 2
+                                                        # prepare entry with portal offset and bot position at time of placement
+                                                        entry = [offset, (bot_position[1] << 16) | bot_position[0]]
+                                                        placed_portals[i][portal_id] << entry
                                                         if placed_portals[i][portal_id].size == 1
-                                                            @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} placed the first half of portal #{portal_id + 1}." }
+                                                            @events << { tick: @tick, type: 'portal_half_placed', bot: i, portal_id: portal_id, position: [dx, dy] }
                                                         else
-                                                            @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} completed portal #{portal_id + 1}." }
+                                                            @events << { tick: @tick, type: 'portal_completed', bot: i, portal_id: portal_id, position: [dx, dy] }
+                                                        end
+                                                        if @announcer_enabled
+                                                            if placed_portals[i][portal_id].size == 1
+                                                                @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} placed the first half of portal #{portal_id + 1}." }
+                                                            else
+                                                                @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{@bots[i][:name]} completed portal #{portal_id + 1}." }
+                                                            end
                                                         end
                                                     end
                                                 end
-                                            end
 
-                                        end
-                                    end
-                                end
-                            elsif command == 'WAIT'
-                                # no-op
-                            else
-                                # invalid command -> ignore
-                            end
-                            @events << { tick: @tick, type: 'bot_moved', bot: i, from: prev_bot_position, to: @bots[i][:position], command: command[0, 16] }
-                        end
-                    end
-
-                    # STEP 4: COLLECT GEMS & DECAY GEMS
-                    if @tick < @max_ticks
-                        collected_gems = []
-                        @gems.each.with_index do |gem, i|
-                            collected_this_gem = false
-                            (0...@bots.size).each do |_k|
-                                k = (_k + bot_with_initiative) % @bots.size
-                                bot = @bots[k]
-                                next if bot[:disqualified_for]
-                                if bot[:position] == gem[:position]
-                                    collected_this_gem = true
-                                    collected_gems << i
-                                    bot[:score] += gem[:ttl]
-                                    results[k][:ticks_to_first_capture] ||= @tick
-                                    if @announcer_enabled
-                                        @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{bot[:name]} scored a gem with #{gem[:ttl]} points!" }
-                                        event = { tick: @tick, type: 'gem_collected', bot: k, delta: gem[:ttl], new_score: bot[:score], position: gem[:position], id: gem[:id] }
-                                        if @bots.size > 1
-                                            other_idx = 1 - k
-                                            if @bots[other_idx][:disqualified_for].nil?
-                                                event[:other_bot] = @bots[other_idx][:position]
                                             end
                                         end
-                                        @events << event
                                     end
+                                elsif command == 'WAIT'
+                                    # no-op
+                                else
+                                    # invalid command -> ignore
                                 end
-                                break if collected_this_gem
+
+                                apply_comm_write(i, extra_data)
+                                @events << { tick: @tick, type: 'bot_moved', bot: i, from: prev_bot_position, to: @bots[i][:position], command: command[0, 16] }
                             end
                         end
-                        collected_gems.reverse.each do |i|
-                            @gem_id_for_offset.delete(@gems[i][:position_offset])
-                            if @emit_signal_channels
-                                @channel_blocked_until[@gems[i][:channel]] = @tick + GEM_CHANNEL_COOLDOWN
-                            end
-                            @gems.delete_at(i)
-                        end
-                        @gems.each.with_index do |gem, i|
-                            gem[:ttl] -= 1
-                            if gem[:ttl] <= 0
-                                @events << { tick: @tick, type: 'gem_expired', position: gem[:position], id: gem[:id] }
-                            end
-                        end
-                        @gems.each do |gem|
-                            if gem[:ttl] <= 0
-                                @gem_id_for_offset.delete(gem[:position_offset])
-                                if @emit_signal_channels
-                                    @channel_blocked_until[gem[:channel]] = @tick + GEM_CHANNEL_COOLDOWN
-                                end
-                            end
-                        end
-                        @gems.reject! do |gem|
-                            gem[:ttl] <= 0
-                        end
+
+                        # Collect immediately after this batch has been resolved.
+                        # Later slot batches therefore no longer see gems that were
+                        # already collected by earlier slot pairs in the same tick.
+                        collect_gems_for_initiative_order(batch_order, ticks_to_first_capture_by_team, signal_level)
                     end
+
+                    # STEP 4: DECAY GEMS
+                    decay_gems
 
                     if @gems.size < @max_gems
                         if @gem_fel_index < @gem_fel.size
@@ -2423,32 +2664,12 @@ class Runner
         end
         if @rounds == 1
             unless @ansi_log_path
-                puts "Seed: #{@seed.to_s(36)} / Score: #{@bots.map { |x| x[:score]}.join(' / ')}"
+                puts "Seed: #{@seed.to_s(36)} / Score: #{score_summary}"
             end
         else
             print "\rFinished round #{@round + 1} of #{@rounds}..."
         end
-        @bots.each.with_index do |bot, i|
-            results[i][:score] = bot[:score]
-            results[i][:disqualified_for] = bot[:disqualified_for]
-            first_response_time = (bot[:response_times].size > 0 ? (bot[:response_times].first * 1e9).to_i : nil)
-            remaining_response_times = bot[:response_times].map { |x| (x * 1e9).to_i }
-            remaining_response_times.shift if remaining_response_times.size > 0
-            results[i][:response_time_stats] = {
-                :first => first_response_time,
-                :min => (remaining_response_times.size > 0 ? remaining_response_times.min : nil),
-                :median => (remaining_response_times.size > 0 ? remaining_response_times.sort[remaining_response_times.size / 2] : nil),
-                :max => (remaining_response_times.size > 0 ? remaining_response_times.max : nil),
-            }
-            results[i][:stderr_log] = bot[:stderr_log]
-            if @profile
-                results[i][:gem_utilization] = (ttl_spawned > 0 ? (bot[:score].to_f / ttl_spawned.to_f * 100.0 * 100).to_i.to_f / 100 : 0.0)
-                results[i][:tile_coverage] = ((@tiles_revealed[i] & @floor_tiles_set).size.to_f / @floor_tiles_set.size.to_f * 100.0 * 100).to_i.to_f / 100
-            end
-            if @check_determinism
-                results[i][:protocol_checksum] = Digest::SHA256.hexdigest(@protocol[i].to_json)
-            end
-        end
+        results = build_team_results(ttl_spawned, ticks_to_first_capture_by_team)
         if @ansi_log_path
             path = @ansi_log_path.sub('.json.gz', "-#{@seed.to_s(36)}.json.gz")
             emoji_widths = {}
@@ -2813,7 +3034,8 @@ if options[:rounds] == 1
     if write_profile_json_path
         all_reports = []
 
-        runner.bots.each_with_index do |bot, i|
+        (0...bot_paths.size).each do |i|
+            bot = runner.team_representative(i)
             score = results[i][:score]
             gu    = results[i][:gem_utilization]
             tc    = results[i][:tile_coverage]
@@ -2900,7 +3122,8 @@ else
         runner.setup
         bot_paths.each.with_index { |path, i| runner.add_team(path, i, bot_args[i] || []) }
         if i == 0
-            runner.bots.each.with_index do |bot, k|
+            (0...bot_paths.size).each do |team|
+                bot = runner.team_representative(team)
                 bot_data << {:name => bot[:name], :emoji => bot[:emoji]}
             end
         end
