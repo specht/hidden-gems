@@ -37,7 +37,7 @@ OVERTIME_BUDGET       = 1.5
 
 OPTIONS_FOR_BOT = %w(stage_key width height generator max_ticks emit_signals
                      emit_signal_channels vis_radius max_gems gem_spawn_rate
-                     gem_ttl max_antennas max_portals signal_radius
+                     gem_ttl swarm_gem_ttl max_antennas max_portals signal_radius
                      signal_cutoff signal_noise signal_quantization
                      signal_fade enable_debug timeout_scale
                      instances_per_team comm_bytes swarm_gems
@@ -187,6 +187,7 @@ class Runner
                    highlight_color:, enable_debug:, timeout_scale:,
                    instances_per_team:, comm_bytes:,
                    swarm_gems: false, swarm_gem_chance: 0.0,
+                   swarm_gem_ttl: nil,
                    swarm_node_count: 3, swarm_required_nodes: 2,
                    swarm_node_distance: 5,
                    swarm_score_two_nodes: 3.0,
@@ -249,6 +250,7 @@ class Runner
         @comm_bytes = [comm_bytes.to_i, 0].max
         @swarm_gems = !!swarm_gems
         @swarm_gem_chance = swarm_gem_chance
+        @swarm_gem_ttl = swarm_gem_ttl
         @swarm_node_count = swarm_node_count
         @swarm_required_nodes = swarm_required_nodes
         @swarm_node_distance = swarm_node_distance
@@ -261,9 +263,10 @@ class Runner
         @interactive_mode = false
 
         param_rng = PCG32.new(@seed)
-        [:width, :height, :max_ticks, :vis_radius, :gem_ttl, :max_gems, :max_antennas,
-         :max_portals, :signal_radius, :signal_fade, :rounds,
-         :swarm_node_count, :swarm_required_nodes, :swarm_node_distance].each do |_key|
+        [:width, :height, :max_ticks, :vis_radius, :gem_ttl, :swarm_gem_ttl,
+         :max_gems, :max_antennas, :max_portals, :signal_radius, :signal_fade,
+         :rounds, :swarm_node_count, :swarm_required_nodes,
+         :swarm_node_distance].each do |_key|
             key = "@#{_key}".to_sym
             value = instance_variable_get(key)
             if value.is_a?(String) && value.include?('..')
@@ -281,6 +284,9 @@ class Runner
                 instance_variable_set(key, parts[0] + param_rng.next_float * (parts[1] - parts[0]))
             end
         end
+
+        @swarm_gem_ttl = @gem_ttl if @swarm_gem_ttl.nil?
+        @swarm_gem_ttl = [@swarm_gem_ttl.to_i, 1].max
 
         @swarm_gem_chance = [[@swarm_gem_chance.to_f, 0.0].max, 1.0].min
         @swarm_node_count = [@swarm_node_count.to_i, 0].max
@@ -783,8 +789,7 @@ class Runner
                 if @rng.next_float() < @gem_spawn_rate
                     candidate_tiles = @floor_tiles_set.dup
                     position_offset = @rng.sample(candidate_tiles.to_a.sort)
-                    ttl = @gem_ttl
-                    @gem_fel << {:tick => t, :offset => position_offset, :ttl => ttl}
+                    @gem_fel << {:tick => t, :offset => position_offset}
                 end
             end
             # we're waiting to spawn the gem at @gem_fel_index
@@ -2008,7 +2013,7 @@ class Runner
         spawn_data = @gem_fel[@gem_fel_index]
         @gem_fel_index += 1
 
-        gem = {:position_offset => spawn_data[:offset], :ttl => spawn_data[:ttl], :kind => :regular}
+        gem = {:position_offset => spawn_data[:offset], :ttl => @gem_ttl, :initial_ttl => @gem_ttl, :kind => :regular}
         gem[:position] = [gem[:position_offset] & 0xFFFF, gem[:position_offset] >> 16]
 
         # Attention: if there happens to be a gem, a swarm node, a bot, or an
@@ -2064,6 +2069,8 @@ class Runner
             end
             if nodes.size == @swarm_node_count
                 gem[:kind] = :swarm
+                gem[:ttl] = @swarm_gem_ttl
+                gem[:initial_ttl] = @swarm_gem_ttl
                 gem[:nodes] = nodes
             end
         end
@@ -2112,7 +2119,7 @@ class Runner
         gem[:id] = @gems_spawned - 1
         if @emit_signal_channels
             gem[:channel] = channel
-            @channel_blocked_until[channel] = @tick + spawn_data[:ttl] + GEM_CHANNEL_COOLDOWN
+            @channel_blocked_until[channel] = @tick + gem[:ttl] + GEM_CHANNEL_COOLDOWN
         end
         @gems << gem
         rebuild_gem_offsets
@@ -2304,11 +2311,12 @@ class Runner
                             temp = gem[:level]
                             if @signal_fade > 0
                                 t = 1.0
-                                gem_age = @gem_ttl - gem[:ttl]
+                                initial_ttl = gem[:initial_ttl] || (swarm_gem?(gem) ? @swarm_gem_ttl : @gem_ttl)
+                                gem_age = initial_ttl - gem[:ttl]
                                 if gem_age < @signal_fade
                                     t = (gem_age + 1).to_f / @signal_fade
-                                elsif gem_age >= @gem_ttl - @signal_fade
-                                    t = (@gem_ttl - gem_age).to_f / @signal_fade
+                                elsif gem_age >= initial_ttl - @signal_fade
+                                    t = (initial_ttl - gem_age).to_f / @signal_fade
                                 end
                                 t = 0.0 if t < 0.0
                                 t = 1.0 if t > 1.0
@@ -2914,9 +2922,9 @@ class Runner
                                         spawn_event[:node_count] = @swarm_node_count
                                         spawn_event[:score_two_nodes] = @swarm_score_two_nodes
                                         spawn_event[:score_three_nodes] = @swarm_score_three_nodes
-                                        if @announcer_enabled
-                                            @chatlog << {emoji: ANNOUNCER_EMOJI, text: "A Swarm Gem appeared. #{@swarm_node_count} Resonance Nodes begin to glow." }
-                                        end
+                                        # if @announcer_enabled
+                                        #     @chatlog << {emoji: ANNOUNCER_EMOJI, text: "A Swarm Gem appeared. #{@swarm_node_count} Resonance Nodes begin to glow." }
+                                        # end
                                     end
                                     @events << spawn_event
                                 end
@@ -3060,6 +3068,7 @@ options = {
     comm_bytes: 0,
     swarm_gems: false,
     swarm_gem_chance: 0.0,
+    swarm_gem_ttl: nil,
     swarm_node_count: 3,
     swarm_required_nodes: 2,
     swarm_node_distance: 5,
@@ -3165,6 +3174,9 @@ OptionParser.new do |opts|
     end
     opts.on("--swarm-gem-chance N", Float, "Chance that a spawned gem becomes a swarm gem (default: #{options[:swarm_gem_chance]})") do |x|
         options[:swarm_gem_chance] = [[x, 0.0].max, 1.0].min
+    end
+    opts.on("--swarm-gem-ttl N", Integer, "TTL for swarm gems; defaults to gem_ttl when omitted") do |x|
+        options[:swarm_gem_ttl] = [x, 1].max
     end
     opts.on("--swarm-node-count N", Integer, "Number of resonance nodes per swarm gem (default: #{options[:swarm_node_count]})") do |x|
         options[:swarm_node_count] = [x, 0].max
