@@ -40,7 +40,10 @@ OPTIONS_FOR_BOT = %w(stage_key width height generator max_ticks emit_signals
                      gem_ttl max_antennas max_portals signal_radius
                      signal_cutoff signal_noise signal_quantization
                      signal_fade enable_debug timeout_scale
-                     instances_per_team comm_bytes)
+                     instances_per_team comm_bytes swarm_gems
+                     swarm_gem_chance swarm_node_count swarm_required_nodes
+                     swarm_node_distance swarm_score_two_nodes
+                     swarm_score_three_nodes)
 
 ANSI = /\e\[[0-9;:<>?]*[@-~]/
 
@@ -113,8 +116,12 @@ class Runner
     PORTAL_EMOJIS = %w(🔴 🟠 🟡 🟢 🔵 🟣 ⚪ ⚫)
     ANTENNA_EMOJI = '📡'
     GEM_EMOJI = '💎'
+    SWARM_GEM_EMOJI = '🔮'
+    SWARM_NODE_EMOJI = '🔸'
     ANNOUNCER_EMOJI = '🎙️'
     GEM_COLOR = '#238acc'
+    SWARM_GEM_COLOR = '#d946ef'
+    SWARM_NODE_COLOR = '#facc15'
     FLOOR_COLOR = '#222728'
     WALL_COLOR = '#555753'
     COMMENT_SINGLE = [
@@ -178,7 +185,12 @@ class Runner
                    ansi_log_path:, write_highlights:, write_stdin:,
                    show_timings:, start_paused:, contest_mode:,
                    highlight_color:, enable_debug:, timeout_scale:,
-                   instances_per_team:, comm_bytes:
+                   instances_per_team:, comm_bytes:,
+                   swarm_gems: false, swarm_gem_chance: 0.0,
+                   swarm_node_count: 3, swarm_required_nodes: 2,
+                   swarm_node_distance: 5,
+                   swarm_score_two_nodes: 3.0,
+                   swarm_score_three_nodes: 5.0
                    )
         @seed = seed
         @width = width
@@ -235,6 +247,14 @@ class Runner
         @team_count = 1
         @instances_per_team = [instances_per_team.to_i, 1].max
         @comm_bytes = [comm_bytes.to_i, 0].max
+        @swarm_gems = !!swarm_gems
+        @swarm_gem_chance = swarm_gem_chance
+        @swarm_node_count = swarm_node_count
+        @swarm_required_nodes = swarm_required_nodes
+        @swarm_node_distance = swarm_node_distance
+        @swarm_score_two_nodes = swarm_score_two_nodes
+        @swarm_score_three_nodes = swarm_score_three_nodes
+        @swarm_node_by_offset = {}
         @bot_index_by_team_slot = {}
         @faded_highlight_color = mix_rgb_hex(@highlight_color, '#000000', 0.25)
         @demo_mode = @ansi_log_path && File.basename(@ansi_log_path).include?('demo')
@@ -242,7 +262,8 @@ class Runner
 
         param_rng = PCG32.new(@seed)
         [:width, :height, :max_ticks, :vis_radius, :gem_ttl, :max_gems, :max_antennas,
-         :max_portals, :signal_radius, :signal_fade, :rounds].each do |_key|
+         :max_portals, :signal_radius, :signal_fade, :rounds,
+         :swarm_node_count, :swarm_required_nodes, :swarm_node_distance].each do |_key|
             key = "@#{_key}".to_sym
             value = instance_variable_get(key)
             if value.is_a?(String) && value.include?('..')
@@ -251,7 +272,8 @@ class Runner
                 instance_variable_set(key, new_value)
             end
         end
-        [:gem_spawn_rate, :signal_noise].each do |_key|
+        [:gem_spawn_rate, :signal_noise, :swarm_gem_chance,
+         :swarm_score_two_nodes, :swarm_score_three_nodes].each do |_key|
             key = "@#{_key}".to_sym
             value = instance_variable_get(key)
             if value.is_a?(String) && value.include?('..')
@@ -259,6 +281,14 @@ class Runner
                 instance_variable_set(key, parts[0] + param_rng.next_float * (parts[1] - parts[0]))
             end
         end
+
+        @swarm_gem_chance = [[@swarm_gem_chance.to_f, 0.0].max, 1.0].min
+        @swarm_node_count = [@swarm_node_count.to_i, 0].max
+        @swarm_required_nodes = [@swarm_required_nodes.to_i, 0].max
+        @swarm_required_nodes = [@swarm_required_nodes, @swarm_node_count].min
+        @swarm_node_distance = [@swarm_node_distance.to_i, 1].max
+        @swarm_score_two_nodes = [@swarm_score_two_nodes.to_f, 1.0].max
+        @swarm_score_three_nodes = [@swarm_score_three_nodes.to_f, @swarm_score_two_nodes].max
     end
 
     def options_hash
@@ -1288,6 +1318,181 @@ class Runner
         end
     end
 
+    def gem_kind(gem)
+        gem[:kind] || :regular
+    end
+
+    def swarm_gem?(gem)
+        gem_kind(gem) == :swarm
+    end
+
+    def gem_emoji(gem)
+        swarm_gem?(gem) ? SWARM_GEM_EMOJI : GEM_EMOJI
+    end
+
+    def gem_color(gem)
+        swarm_gem?(gem) ? SWARM_GEM_COLOR : GEM_COLOR
+    end
+
+    def occupied_swarm_node_offsets(gem)
+        occupied = Set.new
+        return occupied unless swarm_gem?(gem)
+
+        (gem[:nodes] || []).each do |node|
+            node_position = node[:position]
+            if @bots.any? { |bot| !bot[:disqualified_for] && bot[:position] == node_position }
+                occupied << node[:offset]
+            end
+        end
+
+        occupied
+    end
+
+    def occupied_swarm_node_count(gem)
+        occupied_swarm_node_offsets(gem).size
+    end
+
+    def swarm_score_multiplier(occupied_nodes)
+        return nil if occupied_nodes < @swarm_required_nodes
+        return @swarm_score_three_nodes.to_f if occupied_nodes >= @swarm_node_count
+        @swarm_score_two_nodes.to_f
+    end
+
+    def gem_score(gem, occupied_nodes = nil)
+        unless swarm_gem?(gem)
+            return gem[:ttl]
+        end
+
+        occupied_nodes = occupied_swarm_node_count(gem) if occupied_nodes.nil?
+        multiplier = swarm_score_multiplier(occupied_nodes)
+        return nil if multiplier.nil?
+
+        (gem[:ttl].to_f * multiplier).round
+    end
+
+    def max_gem_score(gem)
+        if swarm_gem?(gem)
+            (gem[:ttl].to_f * @swarm_score_three_nodes.to_f).round
+        else
+            gem[:ttl]
+        end
+    end
+
+    def rebuild_gem_offsets
+        @gem_id_for_offset.clear
+        @swarm_node_by_offset.clear
+
+        @gems.each_with_index do |gem, gem_index|
+            @gem_id_for_offset[gem[:position_offset]] = gem_index
+
+            next unless swarm_gem?(gem)
+
+            (gem[:nodes] || []).each_with_index do |node, node_index|
+                @swarm_node_by_offset[node[:offset]] = [gem_index, node_index]
+            end
+        end
+    end
+
+    def occupied_offsets_for_spawn(placed_antennas)
+        occupied_points = Set.new
+
+        @gems.each do |g|
+            occupied_points << g[:position_offset]
+            if swarm_gem?(g)
+                (g[:nodes] || []).each do |node|
+                    occupied_points << node[:offset]
+                end
+            end
+        end
+
+        @bots.each do |b|
+            occupied_points << ((b[:position][1] << 16) | b[:position][0])
+        end
+
+        placed_antennas.each do |a|
+            a.each do |offset|
+                occupied_points << offset
+            end
+        end
+
+        occupied_points
+    end
+
+    def place_swarm_nodes_for_gem(gem, occupied_points)
+        return [] unless @swarm_gems
+        return [] if @swarm_node_count <= 0
+
+        gx = gem[:position][0]
+        gy = gem[:position][1]
+        start_offset = gem[:position_offset]
+        target_distance = [@swarm_node_distance.to_i, 1].max
+        min_node_distance = [[(target_distance / 2.0).ceil, 2].max, target_distance].min
+
+        seen = Set.new
+        queue = [[gx, gy, 0]]
+        seen << start_offset
+        candidates = []
+
+        until queue.empty?
+            x, y, dist = queue.shift
+            offset = (y << 16) | x
+
+            if offset != start_offset && !occupied_points.include?(offset)
+                candidates << {
+                    :position => [x, y],
+                    :offset => offset,
+                    :distance => dist,
+                    :distance_error => (dist - target_distance).abs
+                }
+            end
+
+            [[-1, 0], [1, 0], [0, -1], [0, 1]].each do |dx, dy|
+                nx = x + dx
+                ny = y + dy
+                next if nx < 0 || ny < 0 || nx >= @width || ny >= @height
+
+                noffset = (ny << 16) | nx
+                next if seen.include?(noffset)
+                next if @maze.include?(noffset)
+
+                seen << noffset
+                queue << [nx, ny, dist + 1]
+            end
+        end
+
+        @rng.shuffle!(candidates)
+        candidates.sort_by! { |c| [c[:distance_error], c[:distance]] }
+
+        nodes = []
+        candidates.each do |candidate|
+            next if nodes.any? do |node|
+                (node[:position][0] - candidate[:position][0]).abs +
+                    (node[:position][1] - candidate[:position][1]).abs < min_node_distance
+            end
+
+            nodes << candidate
+            break if nodes.size >= @swarm_node_count
+        end
+
+        if nodes.size < @swarm_node_count
+            candidates.each do |candidate|
+                next if nodes.any? { |node| node[:offset] == candidate[:offset] }
+
+                nodes << candidate
+                break if nodes.size >= @swarm_node_count
+            end
+        end
+
+        return [] if nodes.size < @swarm_node_count
+
+        nodes.each do |node|
+            node.delete(:distance)
+            node.delete(:distance_error)
+        end
+
+        nodes
+    end
+
     def collect_gems_for_initiative_order(initiative_order, ticks_to_first_capture_by_team, signal_level)
         return if @tick >= @max_ticks
         return if @gems.empty?
@@ -1298,48 +1503,80 @@ class Runner
             initiative_order.each do |k|
                 bot = @bots[k]
                 next if bot.nil? || bot[:disqualified_for]
+                next unless bot[:position] == gem[:position]
 
-                if bot[:position] == gem[:position]
-                    collected_this_gem = true
-                    collected_gems << i
-                    bot[:score] += gem[:ttl]
-                    ticks_to_first_capture_by_team[bot[:team]] ||= @tick
+                occupied_nodes = nil
+                multiplier = nil
+                points = nil
 
-                    if @announcer_enabled
-                        scorer = @instances_per_team > 1 ? team_label(bot[:team], with_name: true) : "#{bot[:name]} #{bot[:emoji]}"
-                        @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{scorer} scored a gem with #{gem[:ttl]} points!" }
-                        event = {
-                            tick: @tick,
-                            type: 'gem_collected',
-                            bot: k,
-                            team: bot[:team],
-                            delta: gem[:ttl],
-                            new_score: bot[:score],
-                            new_team_score: team_score(bot[:team]),
-                            position: gem[:position],
-                            id: gem[:id]
-                        }
-                        if @team_count == 2
-                            other_team = 1 - bot[:team]
-                            other_bot = team_bots(other_team).find { |b| b[:disqualified_for].nil? }
-                            event[:other_bot] = other_bot[:position] if other_bot
+                if swarm_gem?(gem)
+                    occupied_nodes = occupied_swarm_node_count(gem)
+                    multiplier = swarm_score_multiplier(occupied_nodes)
+                    next if multiplier.nil?
+                    points = gem_score(gem, occupied_nodes)
+                else
+                    points = gem_score(gem)
+                end
+
+                collected_this_gem = true
+                collected_gems << i
+                bot[:score] += points
+                ticks_to_first_capture_by_team[bot[:team]] ||= @tick
+
+                scorer = @instances_per_team > 1 ? team_label(bot[:team], with_name: true) : "#{bot[:name]} #{bot[:emoji]}"
+                if @announcer_enabled
+                    if swarm_gem?(gem)
+                        node_text = "#{occupied_nodes}/#{@swarm_node_count} resonance nodes"
+                        if occupied_nodes >= @swarm_node_count
+                            @chatlog << {emoji: ANNOUNCER_EMOJI, text: "Perfect resonance! #{scorer} scored a Swarm Gem with #{node_text}: #{points} points!" }
+                        else
+                            @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{scorer} scored a Swarm Gem with #{node_text}: #{points} points!" }
                         end
-                        @events << event
+                    else
+                        @chatlog << {emoji: ANNOUNCER_EMOJI, text: "#{scorer} scored a gem with #{points} points!" }
                     end
                 end
 
-                break if collected_this_gem
+                event = {
+                    tick: @tick,
+                    type: 'gem_collected',
+                    gem_type: gem_kind(gem).to_s,
+                    bot: k,
+                    team: bot[:team],
+                    delta: points,
+                    new_score: bot[:score],
+                    new_team_score: team_score(bot[:team]),
+                    position: gem[:position],
+                    id: gem[:id]
+                }
+
+                if swarm_gem?(gem)
+                    event[:occupied_nodes] = occupied_nodes
+                    event[:required_nodes] = @swarm_required_nodes
+                    event[:node_count] = @swarm_node_count
+                    event[:multiplier] = multiplier
+                    event[:nodes] = (gem[:nodes] || []).map { |node| node[:position] }
+                end
+
+                if @team_count == 2
+                    other_team = 1 - bot[:team]
+                    other_bot = team_bots(other_team).find { |b| b[:disqualified_for].nil? }
+                    event[:other_bot] = other_bot[:position] if other_bot
+                end
+                @events << event
+
+                break
             end
         end
 
         collected_gems.reverse.each do |i|
-            @gem_id_for_offset.delete(@gems[i][:position_offset])
             if @emit_signal_channels
                 @channel_blocked_until[@gems[i][:channel]] = @tick + GEM_CHANNEL_COOLDOWN
             end
             @gems.delete_at(i)
             signal_level.delete_at(i) if signal_level
         end
+        rebuild_gem_offsets
     end
 
     def decay_gems
@@ -1348,13 +1585,18 @@ class Runner
         @gems.each do |gem|
             gem[:ttl] -= 1
             if gem[:ttl] <= 0
-                @events << { tick: @tick, type: 'gem_expired', position: gem[:position], id: gem[:id] }
+                event = { tick: @tick, type: 'gem_expired', gem_type: gem_kind(gem).to_s, position: gem[:position], id: gem[:id] }
+                if swarm_gem?(gem)
+                    event[:nodes] = (gem[:nodes] || []).map { |node| node[:position] }
+                    event[:required_nodes] = @swarm_required_nodes
+                    event[:node_count] = @swarm_node_count
+                end
+                @events << event
             end
         end
 
         @gems.each do |gem|
             if gem[:ttl] <= 0
-                @gem_id_for_offset.delete(gem[:position_offset])
                 if @emit_signal_channels
                     @channel_blocked_until[gem[:channel]] = @tick + GEM_CHANNEL_COOLDOWN
                 end
@@ -1364,6 +1606,7 @@ class Runner
         @gems.reject! do |gem|
             gem[:ttl] <= 0
         end
+        rebuild_gem_offsets
     end
 
     def announce_competitors
@@ -1467,6 +1710,20 @@ class Runner
                 end
             end
 
+            swarm_node_override = {}
+            @gems.each_with_index do |gem, gem_index|
+                next unless swarm_gem?(gem)
+
+                occupied_nodes = occupied_swarm_node_offsets(gem)
+                (gem[:nodes] || []).each_with_index do |node, node_index|
+                    swarm_node_override[node[:offset]] = {
+                        gem_index: gem_index,
+                        node_index: node_index,
+                        occupied: occupied_nodes.include?(node[:offset])
+                    }
+                end
+            end
+
             if @enable_debug
                 @bots.each.with_index do |x, i|
                     bot_highlights[i] = {}
@@ -1507,6 +1764,11 @@ class Runner
                             end
                             bg = @wall_color_cache[offset]
                         end
+                        node_info = swarm_node_override[offset]
+                        if node_info && !(@maze.include?(offset) && !have_antenna)
+                            node_mix = node_info[:occupied] ? 0.35 : 0.45
+                            bg = mix_rgb_hex(SWARM_NODE_COLOR, bg, node_mix)
+                        end
                         $timings.profile("find bots") do
                             if @bot_id_for_offset.include?(offset)
                                 bot_index = @bot_id_for_offset[offset]
@@ -1523,7 +1785,12 @@ class Runner
                             if @gem_id_for_offset.include?(offset)
                                 gem_index = @gem_id_for_offset[offset]
                                 gem = @gems[gem_index]
-                                c = GEM_EMOJI
+                                c = gem_emoji(gem)
+                                while vwidth(c) < @tile_width
+                                    c += ' '
+                                end
+                            elsif node_info && !@bot_id_for_offset.include?(offset)
+                                c = SWARM_NODE_EMOJI
                                 while vwidth(c) < @tile_width
                                     c += ' '
                                 end
@@ -1536,7 +1803,7 @@ class Runner
                                             # clamp signal level for rendering
                                             level = 0.0 if level < 0.0
                                             level = 1.0 if level > 1.0
-                                            bg = mix_rgb_hex(GEM_COLOR, bg, 1.0 - level)
+                                            bg = mix_rgb_hex(gem_color(p), bg, 1.0 - level)
                                         end
                                     end
                                 end
@@ -1741,23 +2008,12 @@ class Runner
         spawn_data = @gem_fel[@gem_fel_index]
         @gem_fel_index += 1
 
-        gem = {:position_offset => spawn_data[:offset], :ttl => spawn_data[:ttl]}
+        gem = {:position_offset => spawn_data[:offset], :ttl => spawn_data[:ttl], :kind => :regular}
         gem[:position] = [gem[:position_offset] & 0xFFFF, gem[:position_offset] >> 16]
 
-        # Attention: if there happens to be a gem or a bot already at this position,
-        # let's find another position nearby.
-        occupied_points = Set.new()
-        @gems.each do |g|
-            occupied_points << ((g[:position][1] << 16) | g[:position][0])
-        end
-        @bots.each do |b|
-            occupied_points << ((b[:position][1] << 16) | b[:position][0])
-        end
-        placed_antennas.each do |a|
-            a.each do |offset|
-                occupied_points << offset
-            end
-        end
+        # Attention: if there happens to be a gem, a swarm node, a bot, or an
+        # antenna already at this position, let's find another position nearby.
+        occupied_points = occupied_offsets_for_spawn(placed_antennas)
 
         dist_field = {}
         wavefront = Set.new()
@@ -1796,6 +2052,19 @@ class Runner
                 break if good
                 wavefront = new_wavefront
                 distance += 1
+            end
+        end
+
+        if @swarm_gems && @swarm_node_count > 0 && @swarm_required_nodes > 0 && @rng.next_float < @swarm_gem_chance
+            node_occupied_points = occupied_points.dup
+            node_occupied_points << gem[:position_offset]
+            nodes = []
+            $timings.profile("spawn gem: place swarm nodes") do
+                nodes = place_swarm_nodes_for_gem(gem, node_occupied_points)
+            end
+            if nodes.size == @swarm_node_count
+                gem[:kind] = :swarm
+                gem[:nodes] = nodes
             end
         end
 
@@ -1841,13 +2110,13 @@ class Runner
 
         @gems_spawned += 1
         gem[:id] = @gems_spawned - 1
-        @gem_id_for_offset[gem[:position_offset]] = gem[:id]
         if @emit_signal_channels
             gem[:channel] = channel
             @channel_blocked_until[channel] = @tick + spawn_data[:ttl] + GEM_CHANNEL_COOLDOWN
         end
         @gems << gem
-        return gem[:ttl]
+        rebuild_gem_offsets
+        max_gem_score(gem)
     end
 
     def read_line_before_deadline(io, deadline_mono)
@@ -2203,6 +2472,7 @@ class Runner
 
                                 data[:initiative] = (batch_order.first == i)
                                 data[:visible_gems] = []
+                                data[:visible_swarm_nodes] = [] if @swarm_gems
                                 vis_key = (bot[:position][1] << 16) | bot[:position][0]
                                 @visibility[vis_key].each do |t|
                                     key = @maze.include?(t) ? :wall : :floor
@@ -2229,7 +2499,32 @@ class Runner
                                     end
                                     @gems.each do |gem|
                                         if gem[:position_offset] == t
-                                            data[:visible_gems] << { :position => gem[:position], :ttl => gem[:ttl] }
+                                            entry = { :position => gem[:position], :ttl => gem[:ttl] }
+                                            if swarm_gem?(gem)
+                                                entry[:type] = 'swarm'
+                                                entry[:nodes] = (gem[:nodes] || []).map { |node| node[:position] }
+                                                entry[:required_nodes] = @swarm_required_nodes
+                                                entry[:occupied_nodes] = occupied_swarm_node_count(gem)
+                                                entry[:score_two_nodes] = @swarm_score_two_nodes
+                                                entry[:score_three_nodes] = @swarm_score_three_nodes
+                                            end
+                                            data[:visible_gems] << entry
+                                        end
+                                    end
+
+                                    if @swarm_gems && @swarm_node_by_offset.include?(t)
+                                        gem_index, node_index = @swarm_node_by_offset[t]
+                                        gem = @gems[gem_index]
+                                        if gem
+                                            node = (gem[:nodes] || [])[node_index]
+                                            if node
+                                                data[:visible_swarm_nodes] << {
+                                                    :position => node[:position],
+                                                    :gem_position => gem[:position],
+                                                    :gem_id => gem[:id],
+                                                    :occupied => @bots.any? { |b| !b[:disqualified_for] && b[:position] == node[:position] }
+                                                }
+                                            end
                                         end
                                     end
                                 end
@@ -2604,7 +2899,26 @@ class Runner
                                 end
                                 unless can_spawn_channels.empty?
                                     ttl_spawned += spawn_gem(@rng.sample(can_spawn_channels), placed_antennas)
-                                    @events << { tick: @tick, type: 'gem_spawned', position: @gems.last[:position], ttl: @gems.last[:ttl], id: @gems.last[:id] }
+                                    spawned_gem = @gems.last
+                                    spawn_event = {
+                                        tick: @tick,
+                                        type: 'gem_spawned',
+                                        gem_type: gem_kind(spawned_gem).to_s,
+                                        position: spawned_gem[:position],
+                                        ttl: spawned_gem[:ttl],
+                                        id: spawned_gem[:id]
+                                    }
+                                    if swarm_gem?(spawned_gem)
+                                        spawn_event[:nodes] = (spawned_gem[:nodes] || []).map { |node| node[:position] }
+                                        spawn_event[:required_nodes] = @swarm_required_nodes
+                                        spawn_event[:node_count] = @swarm_node_count
+                                        spawn_event[:score_two_nodes] = @swarm_score_two_nodes
+                                        spawn_event[:score_three_nodes] = @swarm_score_three_nodes
+                                        if @announcer_enabled
+                                            @chatlog << {emoji: ANNOUNCER_EMOJI, text: "A Swarm Gem appeared. #{@swarm_node_count} Resonance Nodes begin to glow." }
+                                        end
+                                    end
+                                    @events << spawn_event
                                 end
                             end
                         end
@@ -2744,6 +3058,13 @@ options = {
     timeout_scale: 1.0,
     instances_per_team: 1,
     comm_bytes: 0,
+    swarm_gems: false,
+    swarm_gem_chance: 0.0,
+    swarm_node_count: 3,
+    swarm_required_nodes: 2,
+    swarm_node_distance: 5,
+    swarm_score_two_nodes: 3.0,
+    swarm_score_three_nodes: 5.0,
 }
 
 unless ARGV.include?('--stage')
@@ -2838,6 +3159,27 @@ OptionParser.new do |opts|
     end
     opts.on("--comm-bytes N", Integer, "Team communication buffer size in bytes (default: #{options[:comm_bytes]})") do |x|
         options[:comm_bytes] = [x, 0].max
+    end
+    opts.on("--[no-]swarm-gems", "Enable swarm gems (default: #{options[:swarm_gems]})") do |x|
+        options[:swarm_gems] = x
+    end
+    opts.on("--swarm-gem-chance N", Float, "Chance that a spawned gem becomes a swarm gem (default: #{options[:swarm_gem_chance]})") do |x|
+        options[:swarm_gem_chance] = [[x, 0.0].max, 1.0].min
+    end
+    opts.on("--swarm-node-count N", Integer, "Number of resonance nodes per swarm gem (default: #{options[:swarm_node_count]})") do |x|
+        options[:swarm_node_count] = [x, 0].max
+    end
+    opts.on("--swarm-required-nodes N", Integer, "Required occupied resonance nodes (default: #{options[:swarm_required_nodes]})") do |x|
+        options[:swarm_required_nodes] = [x, 0].max
+    end
+    opts.on("--swarm-node-distance N", Integer, "Preferred BFS distance of resonance nodes from the swarm gem (default: #{options[:swarm_node_distance]})") do |x|
+        options[:swarm_node_distance] = [x, 1].max
+    end
+    opts.on("--swarm-score-two-nodes N", Float, "Score multiplier when the required nodes are occupied (default: #{options[:swarm_score_two_nodes]})") do |x|
+        options[:swarm_score_two_nodes] = [x, 1.0].max
+    end
+    opts.on("--swarm-score-three-nodes N", Float, "Score multiplier when all nodes are occupied (default: #{options[:swarm_score_three_nodes]})") do |x|
+        options[:swarm_score_three_nodes] = [x, 1.0].max
     end
     opts.on("-e", "--[no-]emit-signals", "Enable gem signals (default: #{options[:emit_signals]})") do |x|
         options[:emit_signals] = x
