@@ -142,3 +142,5 @@ stage-6@0.1:
     gem_spawn_rate: 0.03..0.05
     gem_ttl: 600
     max_ticks: 2000
+    instances_per_team: 4
+    comm_bytes: 32

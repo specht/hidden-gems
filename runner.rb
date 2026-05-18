@@ -1825,10 +1825,11 @@ class Runner
                                     q = @signal_quantization.to_f
                                     l = ((l * q).floor).to_f / q
                                 end
-                                l = 0.0 if l < @signal_cutoff.to_f
-                                level[offset] = l
-                                seen[offset] = true
-                                new_wavefront << [dx, dy]
+                                if l >= @signal_cutoff.to_f
+                                    level[offset] = l
+                                    seen[offset] = true
+                                    new_wavefront << [dx, dy]
+                                end
                             end
                         end
                     end
@@ -2284,6 +2285,8 @@ class Runner
                                 @ansi_log.last[:stdin] = data
                             end
                         end
+
+                        puts prepared.to_json
 
                         # 3b) WRITE PHASE: send this batch to all eligible bots first
                         start_mono   = {}
