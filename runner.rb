@@ -2289,7 +2289,7 @@ class Runner
                             end
                         end
 
-                        puts prepared.to_json
+                        # puts prepared.to_json
 
                         # 3b) WRITE PHASE: send this batch to all eligible bots first
                         start_mono   = {}
