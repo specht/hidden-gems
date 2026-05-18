@@ -1765,10 +1765,10 @@ class Runner
                             bg = @wall_color_cache[offset]
                         end
                         node_info = swarm_node_override[offset]
-                        if node_info && !(@maze.include?(offset) && !have_antenna)
-                            node_mix = node_info[:occupied] ? 0.35 : 0.45
-                            bg = mix_rgb_hex(SWARM_NODE_COLOR, bg, node_mix)
-                        end
+                        # if node_info && !(@maze.include?(offset) && !have_antenna)
+                        #     node_mix = node_info[:occupied] ? 0.35 : 0.45
+                        #     bg = mix_rgb_hex(SWARM_NODE_COLOR, bg, node_mix)
+                        # end
                         $timings.profile("find bots") do
                             if @bot_id_for_offset.include?(offset)
                                 bot_index = @bot_id_for_offset[offset]
