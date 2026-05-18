@@ -2178,8 +2178,8 @@ class Runner
                                     dk = OpenSSL::PKCS5.pbkdf2_hmac("#{@seed}/bot/#{i}", "scrim:v1:#{@seed}", 200_000, 4, "sha256")
                                     bot_seed = dk.unpack1("L<")
                                     data[:config][:bot_seed] = bot_seed
-                                    data[:config][:team] = bot[:team]
-                                    data[:config][:slot] = bot[:slot]
+                                    # data[:config][:team] = bot[:team]
+                                    data[:config][:instance] = bot[:slot]
                                     data[:config][:team_count] = @team_count
                                     data[:config][:instances_per_team] = @instances_per_team
                                     data[:config][:comm_bytes] = @comm_bytes
@@ -2265,13 +2265,16 @@ class Runner
                                         next if other[:disqualified_for]
                                         bx, by = other[:position]
                                         if @visibility[vis_key].include?((by << 16) | bx)
-                                            data[:visible_bots] << {
+                                            entry = {
                                                 :position => other[:position],
                                                 :emoji => other[:emoji],
-                                                :team => other[:team],
-                                                :slot => other[:slot],
+                                                # :team => other[:team],
                                                 :teammate => (other[:team] == bot[:team])
                                             }
+                                            if entry[:teammate]
+                                                entry[:instance] = other[:slot]
+                                            end
+                                            data[:visible_bots] << entry
                                         end
                                     end
                                 end
