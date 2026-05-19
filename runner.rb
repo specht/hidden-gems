@@ -1915,23 +1915,33 @@ class Runner
                         Paint[' Rewind', fg_bottom_mix, UI_BACKGROUND_BOTTOM],
                     ],
                 ]
-                bot_line = @bots.map.with_index do |x, i|
+                # bot_line = @bots.map.with_index do |x, i|
+                #     parts = []
+                #     if (i > 0)
+                #         parts << Paint[' : ', fg_bottom_mix, UI_BACKGROUND_BOTTOM]
+                #     end
+                #     parts << Paint["#{x[:emoji]}", UI_FOREGROUND_BOTTOM, UI_BACKGROUND_BOTTOM]
+                #     if @emit_signal_channels
+                #         (0...@max_gems).each.with_index do |c, ci|
+                #             signal_level = ((((@protocol[i][-2] || {})[:bots] || {})[:data] || {})[:channels] || [])[c] || 0.0
+                #             signal_level = 0.0 if signal_level < 0.0
+                #             signal_level = 1.0 if signal_level > 1.0
+                #             signal_level = signal_level ** 0.5
+                #             gauge_character = GAUGE[[(signal_level * (GAUGE.size - 1)).round, GAUGE.size - 1].min]
+                #             parts << Paint[" #{gauge_character}", GAUGE_COLORS[ci % GAUGE_COLORS.size], UI_BACKGROUND_BOTTOM]
+                #         end
+                #     end
+                #     parts << Paint[" #{((@protocol[i][-2] || {})[:bots] || {})[:response]}", UI_FOREGROUND_BOTTOM, UI_BACKGROUND_BOTTOM]
+                #     parts
+                # end
+                bot_line = (0...@team_count).map do |team_index|
                     parts = []
-                    if (i > 0)
-                        parts << Paint[' : ', fg_bottom_mix, UI_BACKGROUND_BOTTOM]
-                    end
-                    parts << Paint["#{x[:emoji]}", UI_FOREGROUND_BOTTOM, UI_BACKGROUND_BOTTOM]
-                    if @emit_signal_channels
-                        (0...@max_gems).each.with_index do |c, ci|
-                            signal_level = ((((@protocol[i][-2] || {})[:bots] || {})[:data] || {})[:channels] || [])[c] || 0.0
-                            signal_level = 0.0 if signal_level < 0.0
-                            signal_level = 1.0 if signal_level > 1.0
-                            signal_level = signal_level ** 0.5
-                            gauge_character = GAUGE[[(signal_level * (GAUGE.size - 1)).round, GAUGE.size - 1].min]
-                            parts << Paint[" #{gauge_character}", GAUGE_COLORS[ci % GAUGE_COLORS.size], UI_BACKGROUND_BOTTOM]
-                        end
-                    end
-                    parts << Paint[" #{((@protocol[i][-2] || {})[:bots] || {})[:response]}", UI_FOREGROUND_BOTTOM, UI_BACKGROUND_BOTTOM]
+                    parts << Paint[' : ', fg_bottom_mix, UI_BACKGROUND_BOTTOM] if team_index != 0
+                    parts << Paint["#{team_label(team_index)} ", UI_FOREGROUND_BOTTOM, UI_BACKGROUND_BOTTOM]
+                    parts << @team_buffers[team_index].map do |byte|
+                        byte += 128
+                        GAUGE[[(byte / 256.0 * (GAUGE.size - 1)).round, GAUGE.size - 1].min]
+                    end.join('')
                     parts
                 end
                 status_line_parts << bot_line
