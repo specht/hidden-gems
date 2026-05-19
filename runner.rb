@@ -1936,12 +1936,13 @@ class Runner
                 # end
                 bot_line = (0...@team_count).map do |team_index|
                     parts = []
-                    parts << Paint[' : ', fg_bottom_mix, UI_BACKGROUND_BOTTOM] if team_index != 0
+                    parts << Paint['  |  ', fg_bottom_mix, UI_BACKGROUND_BOTTOM] if team_index != 0
                     parts << Paint["#{team_label(team_index)} ", UI_FOREGROUND_BOTTOM, UI_BACKGROUND_BOTTOM]
-                    parts << @team_buffers[team_index].map do |byte|
+                    s = @team_buffers[team_index].map do |byte|
                         byte += 128
                         GAUGE[[(byte / 256.0 * (GAUGE.size - 1)).round, GAUGE.size - 1].min]
                     end.join('')
+                    parts << Paint[s, fg_bottom_mix, UI_BACKGROUND_BOTTOM]
                     parts
                 end
                 status_line_parts << bot_line
