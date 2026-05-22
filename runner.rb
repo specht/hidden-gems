@@ -1774,18 +1774,6 @@ class Runner
                         #     node_mix = node_info[:occupied] ? 0.35 : 0.45
                         #     bg = mix_rgb_hex(SWARM_NODE_COLOR, bg, node_mix)
                         # end
-                        $timings.profile("find bots") do
-                            if @bot_id_for_offset.include?(offset)
-                                bot_index = @bot_id_for_offset[offset]
-                                bot = @bots[bot_index]
-                                next if bot[:disqualified_for]
-                                c = bot[:emoji]
-                                while vwidth(c) < @tile_width
-                                    c += ' '
-                                end
-                            end
-                        end
-
                         $timings.profile("find gems") do
                             if @gem_id_for_offset.include?(offset)
                                 gem_index = @gem_id_for_offset[offset]
@@ -1814,6 +1802,18 @@ class Runner
                                 end
                             end
                         end
+                        $timings.profile("find bots") do
+                            if @bot_id_for_offset.include?(offset)
+                                bot_index = @bot_id_for_offset[offset]
+                                bot = @bots[bot_index]
+                                next if bot[:disqualified_for]
+                                c = bot[:emoji]
+                                while vwidth(c) < @tile_width
+                                    c += ' '
+                                end
+                            end
+                        end
+
                         if have_antenna
                             c = ANTENNA_EMOJI
                             while vwidth(c) < @tile_width
