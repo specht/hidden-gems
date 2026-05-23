@@ -51,6 +51,11 @@ GAUGE = "⠀⡀⣀⣄⣤⣦⣶⣷⣿"
 GAUGE_COLORS = ['#ea2830', '#80bc42', '#55beed', '#fad31c', '#f384ae', '#00a8a8', '#7b67ae']
 COMM_HIGHLIGHT_COLORS = ['#ef4444', '#22c55e', '#3b82f6', '#eab308']
 COMM_HIGHLIGHT_FADE_TICKS = 8
+SWARM_SHOCKWAVE_DURATION = 12
+SWARM_SHOCKWAVE_THICKNESS = 1.25
+SWARM_SHOCKWAVE_TRAIL_DISTANCE = 2.5
+SWARM_SHOCKWAVE_OPACITY = 0.85
+SWARM_SHOCKWAVE_TRAIL_OPACITY = 0.38
 GEM_CHANNEL_COOLDOWN = 1
 
 $timings = Timings.new
@@ -1128,6 +1133,100 @@ class Runner
         byte_highlights[slot] = 1.0
     end
 
+    def spawn_swarm_shockwave(position)
+        return unless position
+
+        x = position[0].to_f
+        y = position[1].to_f
+
+        # Expand far enough that the ring can leave the arena even when the gem
+        # is close to a corner. This is visual-only and uses no RNG, so it does
+        # not affect deterministic gameplay.
+        max_radius = [
+            Math.hypot(x, y),
+            Math.hypot((@width - 1) - x, y),
+            Math.hypot(x, (@height - 1) - y),
+            Math.hypot((@width - 1) - x, (@height - 1) - y)
+        ].max + SWARM_SHOCKWAVE_THICKNESS + 1.0
+
+        @arena_effects ||= []
+        @arena_effects << {
+            type: :swarm_shockwave,
+            center: [x, y],
+            start_tick: @tick + 1,
+            duration: SWARM_SHOCKWAVE_DURATION,
+            max_radius: max_radius
+        }
+    end
+
+    def prune_arena_effects(tick)
+        return unless @arena_effects
+
+        @arena_effects.reject! do |effect|
+            next false unless effect[:type] == :swarm_shockwave
+
+            tick - effect[:start_tick] > effect[:duration]
+        end
+    end
+
+    def ring_intensity(distance, radius, thickness, opacity)
+        delta = (distance - radius).abs
+        return 0.0 if delta >= thickness
+
+        # Smooth triangular falloff: strong at the ring center, soft at the edge.
+        edge = 1.0 - (delta / thickness)
+        edge * edge * opacity
+    end
+
+    def apply_arena_effects_to_bg(bg, x, y, tick)
+        return bg unless @arena_effects && !@arena_effects.empty?
+
+        opacity = 0.0
+
+        @arena_effects.each do |effect|
+            next unless effect[:type] == :swarm_shockwave
+
+            age = tick - effect[:start_tick]
+            next if age < 0 || age > effect[:duration]
+
+            progress = age.to_f / effect[:duration].to_f
+            center = effect[:center]
+            distance = Math.hypot(x.to_f - center[0], y.to_f - center[1])
+            radius = effect[:max_radius].to_f * progress
+
+            # The wave is brightest near the origin and fades away as it reaches
+            # the arena boundary.
+            fade = 1.0 - progress
+            fade = 0.0 if fade < 0.0
+
+            main = ring_intensity(
+                distance,
+                radius,
+                SWARM_SHOCKWAVE_THICKNESS,
+                SWARM_SHOCKWAVE_OPACITY * fade
+            )
+
+            # A weaker trailing ring makes the effect feel more like a swoosh
+            # than a single hard line.
+            trail = 0.0
+            trail_radius = radius - SWARM_SHOCKWAVE_TRAIL_DISTANCE
+            if trail_radius > 0.0
+                trail = ring_intensity(
+                    distance,
+                    trail_radius,
+                    SWARM_SHOCKWAVE_THICKNESS * 1.35,
+                    SWARM_SHOCKWAVE_TRAIL_OPACITY * fade
+                )
+            end
+
+            opacity = [opacity, main, trail].max
+        end
+
+        return bg if opacity <= 0.001
+
+        mix_rgb_hex(bg, SWARM_GEM_COLOR, opacity)
+    end
+
     def vwidth(str)
         Unicode::DisplayWidth.of(str.to_s, emoji: true, ambwidth: 1)
     end
@@ -1664,6 +1763,7 @@ class Runner
                     event[:other_bot] = other_bot[:position] if other_bot
                 end
                 @events << event
+                spawn_swarm_shockwave(gem[:position]) if swarm_gem?(gem)
 
                 break
             end
@@ -1750,6 +1850,8 @@ class Runner
     end
 
     def render(tick, signal_level, paused, placed_antennas, placed_portals)
+        prune_arena_effects(tick)
+
         fg_top_mix = mix_rgb_hex(UI_FOREGROUND_TOP, UI_BACKGROUND_TOP, 0.5)
         fg_bottom_mix = mix_rgb_hex(UI_FOREGROUND_BOTTOM, UI_BACKGROUND_BOTTOM, 0.5)
         StringIO.open do |io|
@@ -1977,6 +2079,7 @@ class Runner
                         if @ansi_log_path && @write_highlights
                             bg = old_bg
                         end
+                        bg = apply_arena_effects_to_bg(bg, x, y, tick)
                         io.print Paint[c, nil, bg]
                     end
                     if @enable_chatlog && @chatlog_position == :right
@@ -2383,6 +2486,7 @@ class Runner
         placed_portals = @bots.map { |b| (0...@max_portals).map { |i| [] } }
 
         @events = []
+        @arena_effects = []
         @events << {
             :type => 'match_start',
             :teams => (0...@team_count).map do |team|
