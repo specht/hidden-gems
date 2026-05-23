@@ -49,6 +49,8 @@ ANSI = /\e\[[0-9;:<>?]*[@-~]/
 
 GAUGE = "⠀⡀⣀⣄⣤⣦⣶⣷⣿"
 GAUGE_COLORS = ['#ea2830', '#80bc42', '#55beed', '#fad31c', '#f384ae', '#00a8a8', '#7b67ae']
+COMM_HIGHLIGHT_COLORS = ['#ef4444', '#22c55e', '#3b82f6', '#eab308']
+COMM_HIGHLIGHT_FADE_TICKS = 8
 GEM_CHANNEL_COOLDOWN = 1
 
 $timings = Timings.new
@@ -632,7 +634,10 @@ class Runner
                     # If you want slightly more opening, use <= 1.
                     next unless open_neighbors <= 1
 
-                    next if rand >= anti_lock_in_chance
+                    # Use the runner RNG, not Ruby's global RNG.
+                    # Otherwise the mixed maze can differ between runs with the same seed,
+                    # which also changes the floor tile list and therefore gem spawn positions.
+                    next if @rng.next_float >= anti_lock_in_chance
 
                     candidates = []
 
@@ -646,7 +651,7 @@ class Runner
                         candidates << [nx, ny]
                     end
 
-                    changes << candidates.sample if candidates.any?
+                    changes << @rng.sample(candidates) if candidates.any?
                 end
             end
 
@@ -1044,6 +1049,85 @@ class Runner
         format("#%02X%02X%02X", r, g, b)
     end
 
+    def rgb_from_hex(color)
+        color[1..].scan(/../).map { |h| h.to_i(16) }
+    end
+
+    def comm_highlight_foreground(team_index, byte_index, fallback_fg)
+        return fallback_fg unless @team_buffer_highlights
+
+        team_highlights = @team_buffer_highlights[team_index]
+        return fallback_fg unless team_highlights
+
+        levels = team_highlights[byte_index]
+        return fallback_fg unless levels
+
+        rgb = [0.0, 0.0, 0.0]
+        total_weight = 0.0
+        max_level = 0.0
+
+        levels.each_with_index do |level, instance_index|
+            level = [[level.to_f, 0.0].max, 1.0].min
+            next if level <= 0.001
+
+            max_level = [max_level, level].max
+            color = rgb_from_hex(COMM_HIGHLIGHT_COLORS[instance_index % COMM_HIGHLIGHT_COLORS.size])
+
+            3.times do |i|
+                rgb[i] += color[i] * level
+            end
+            total_weight += level
+        end
+
+        return fallback_fg if total_weight <= 0.0
+
+        active_color = format(
+            "#%02X%02X%02X",
+            (rgb[0] / total_weight).round.clamp(0, 255),
+            (rgb[1] / total_weight).round.clamp(0, 255),
+            (rgb[2] / total_weight).round.clamp(0, 255)
+        )
+
+        mix_rgb_hex(fallback_fg, active_color, max_level)
+    end
+
+    def fade_comm_highlights
+        return unless @team_buffer_highlights
+        return if COMM_HIGHLIGHT_FADE_TICKS <= 0
+
+        fade_step = 1.0 / COMM_HIGHLIGHT_FADE_TICKS.to_f
+
+        @team_buffer_highlights.each do |team_highlights|
+            team_highlights.each do |byte_highlights|
+                byte_highlights.map! do |level|
+                    next 0.0 if level.to_f <= fade_step
+
+                    level.to_f - fade_step
+                end
+            end
+        end
+    end
+
+    def mark_comm_byte_changed(team_index, byte_index, instance_index)
+        return unless @comm_bytes > 0
+        return if team_index.nil? || byte_index.nil?
+
+        @team_buffer_highlights ||= Array.new(@team_count) do
+            Array.new(@comm_bytes) do
+                Array.new([@instances_per_team, 1].max, 0.0)
+            end
+        end
+
+        team_highlights = @team_buffer_highlights[team_index]
+        return unless team_highlights
+
+        byte_highlights = team_highlights[byte_index]
+        return unless byte_highlights
+
+        slot = instance_index.to_i % byte_highlights.size
+        byte_highlights[slot] = 1.0
+    end
+
     def vwidth(str)
         Unicode::DisplayWidth.of(str.to_s, emoji: true, ambwidth: 1)
     end
@@ -1300,13 +1384,19 @@ class Runner
         return unless @comm_bytes > 0
         return unless extra.is_a?(Hash)
 
-        team = @bots[bot_index][:team]
+        bot = @bots[bot_index]
+        team = bot[:team]
+        instance_index = bot[:slot] || 0
         buffer = @team_buffers[team]
         return unless buffer
 
         if extra['comm'].is_a?(Array)
             extra['comm'].first(@comm_bytes).each_with_index do |value, index|
-                buffer[index] = comm_byte(value)
+                new_byte = comm_byte(value)
+                next if buffer[index] == new_byte
+
+                buffer[index] = new_byte
+                mark_comm_byte_changed(team, index, instance_index)
             end
         end
 
@@ -1318,7 +1408,12 @@ class Runner
                     next
                 end
                 next if index < 0 || index >= @comm_bytes
-                buffer[index] = comm_byte(value)
+
+                new_byte = comm_byte(value)
+                next if buffer[index] == new_byte
+
+                buffer[index] = new_byte
+                mark_comm_byte_changed(team, index, instance_index)
             end
         end
     end
@@ -1938,10 +2033,13 @@ class Runner
                     parts = []
                     parts << Paint['  |  ', fg_bottom_mix, UI_BACKGROUND_BOTTOM] if team_index != 0
                     parts << Paint["#{team_label(team_index)} ", UI_FOREGROUND_BOTTOM, UI_BACKGROUND_BOTTOM]
-                    s = @team_buffers[team_index].map do |byte|
-                        GAUGE[[(byte / 256.0 * (GAUGE.size - 1)).round, GAUGE.size - 1].min]
-                    end.join('')
-                    parts << Paint[s, fg_bottom_mix, UI_BACKGROUND_BOTTOM]
+
+                    @team_buffers[team_index].each_with_index do |byte, byte_index|
+                        gauge_character = GAUGE[[(byte / 256.0 * (GAUGE.size - 1)).round, GAUGE.size - 1].min]
+                        fg = comm_highlight_foreground(team_index, byte_index, fg_bottom_mix)
+                        parts << Paint[gauge_character, fg, UI_BACKGROUND_BOTTOM]
+                    end
+
                     parts
                 end
                 status_line_parts << bot_line
@@ -2268,6 +2366,11 @@ class Runner
         color_to_index = {'#00000000' => 0}
         index_to_color = ['#00000000']
         @team_buffers = Array.new(@team_count) { Array.new(@comm_bytes, 0) }
+        @team_buffer_highlights = Array.new(@team_count) do
+            Array.new(@comm_bytes) do
+                Array.new([@instances_per_team, 1].max, 0.0)
+            end
+        end
 
         antenna_stock = @bots.map { |b| @max_antennas }
         placed_antennas = @bots.map { |b| [] }
@@ -2416,6 +2519,9 @@ class Runner
                     else
                         frames << nil
                     end
+
+                    fade_comm_highlights unless @paused
+
                     t1 = Time.now.to_f
                     @tps = (@tick.to_f / (t1 - t0)).round
                     if @verbose == 1
