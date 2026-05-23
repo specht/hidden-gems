@@ -333,7 +333,7 @@ class Runner
         end
 
         if @generator == 'mixed'
-            inner_segment_width = 0.15
+            inner_segment_width = 0.1 + @rng.next_float * 0.2
 
             raise "Mixed maze needs width >= 12 and height >= 7" if @width < 12 || @height < 7
 
@@ -2800,10 +2800,8 @@ class Runner
                                             if swarm_gem?(gem)
                                                 entry[:type] = 'swarm'
                                                 entry[:nodes] = (gem[:nodes] || []).map { |node| node[:position] }
-                                                entry[:required_nodes] = @swarm_required_nodes
-                                                entry[:occupied_nodes] = occupied_swarm_node_count(gem)
-                                                entry[:score_two_nodes] = @swarm_score_two_nodes
-                                                entry[:score_three_nodes] = @swarm_score_three_nodes
+                                            else
+                                                entry[:type] = 'regular'
                                             end
                                             data[:visible_gems] << entry
                                         end
@@ -2816,10 +2814,7 @@ class Runner
                                             node = (gem[:nodes] || [])[node_index]
                                             if node
                                                 data[:visible_swarm_nodes] << {
-                                                    :position => node[:position],
-                                                    :gem_position => gem[:position],
-                                                    :gem_id => gem[:id],
-                                                    :occupied => @bots.any? { |b| !b[:disqualified_for] && b[:position] == node[:position] }
+                                                    :position => node[:position]
                                                 }
                                             end
                                         end
