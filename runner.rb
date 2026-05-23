@@ -2599,7 +2599,13 @@ class Runner
                             @protocol[i].last[:bots] ||= {}
                             @protocol[i].last[:bots][:data] = data
                             if @ansi_log_path && @write_stdin
-                                @ansi_log.last[:stdin] = data
+                                # Keep the exact JSON payload that each bot receives.
+                                # This used to store only one object, which meant every
+                                # later bot in the batch overwrote the previous bot's input.
+                                # Store by global bot index so multi-bot/team runs keep all
+                                # stdin payloads for this frame/tick.
+                                @ansi_log.last[:stdin] ||= []
+                                @ansi_log.last[:stdin][i] = data
                             end
                         end
 
