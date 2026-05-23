@@ -1939,7 +1939,6 @@ class Runner
                     parts << Paint['  |  ', fg_bottom_mix, UI_BACKGROUND_BOTTOM] if team_index != 0
                     parts << Paint["#{team_label(team_index)} ", UI_FOREGROUND_BOTTOM, UI_BACKGROUND_BOTTOM]
                     s = @team_buffers[team_index].map do |byte|
-                        byte += 128
                         GAUGE[[(byte / 256.0 * (GAUGE.size - 1)).round, GAUGE.size - 1].min]
                     end.join('')
                     parts << Paint[s, fg_bottom_mix, UI_BACKGROUND_BOTTOM]
