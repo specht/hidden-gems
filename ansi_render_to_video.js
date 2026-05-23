@@ -42,6 +42,9 @@ const { values, positionals } = parseArgs({
         "encoder": { type: "string", default: "nvenc" },
         "crf": { type: "string", default: "18" },
         "preset": { type: "string", default: "fast" },
+        "keyint": { type: "string", default: "5" },
+        "all-keyframes": { type: "boolean", default: false },
+        "bframes": { type: "string", default: "0" },
     },
     allowPositionals: true,
 });
@@ -51,7 +54,8 @@ if (positionals.length < 2) {
         "Usage: node ansi_render_to_video_runs.js <input.json> <out.mp4> " +
         "[--font-regular path.ttf] [--font-bold path.ttf] [--emoji-font path.ttf] " +
         "[--fontname Name] [--fontsize 24] [--lineheight 1.25] [--pad 0] " +
-        "[--in-fps 15] [--out-fps 30] [--encoder auto|x264|h264_nvenc|hevc_nvenc] [--crf 18] [--preset veryslow|p1..p7]"
+        "[--in-fps 15] [--out-fps 30] [--encoder auto|x264|h264_nvenc|hevc_nvenc] " +
+        "[--crf 18] [--preset veryslow|p1..p7] [--keyint 5] [--all-keyframes] [--bframes 0]"
     );
     process.exit(1);
 }
@@ -69,6 +73,14 @@ const IN_FPS = parseFloat(values["in-fps"]);
 const OUT_FPS = parseFloat(values["out-fps"]);
 const CRF = parseInt(values.crf, 10);
 const PRESET = values.preset;
+
+// Keyframe settings. Small GOPs make browser seeking much faster.
+// --keyint 5 means one keyframe every 5 frames.
+// --all-keyframes is equivalent to --keyint 1.
+const KEYINT = values["all-keyframes"]
+    ? 1
+    : Math.max(1, parseInt(values.keyint, 10) || 5);
+const BFRAMES = Math.max(0, parseInt(values.bframes, 10) || 0);
 
 // ---------- Fonts ----------
 if (FONT_REG) FontLibrary.use(FONTNAME, [{ path: FONT_REG, weight: 400 }]);
@@ -347,7 +359,9 @@ function wcwidthGrapheme(g, emojiWidths) {
             const cq = Number.isFinite(+values.crf) ? +values.crf : 19;     // reuse --crf as NVENC CQ
             const presetNv = (/^p[1-7]$/.test(values.preset) ? values.preset : "p5");
             const codec = enc.name;                                         // h264_nvenc / hevc_nvenc
-            const bf = codec === "hevc_nvenc" ? "4" : "3";
+            const bFrameArgs = BFRAMES > 0
+                ? ["-rc-lookahead", "20", "-b_ref_mode", "middle", "-bf", String(BFRAMES)]
+                : ["-bf", "0"];
 
             ffOut = [
                 "-an",
@@ -361,10 +375,13 @@ function wcwidthGrapheme(g, emojiWidths) {
                 "-b:v", "0",
                 "-spatial_aq", "1",
                 "-temporal_aq", "1",
-                "-rc-lookahead", "20",
-                "-b_ref_mode", "middle",
-                "-bf", bf,
-                "-g", "240",
+
+                // Browser scrubbing is fastest when keyframes are close together.
+                // KEYINT=1 means every frame is a keyframe; KEYINT=5 is a good compromise.
+                "-g", String(KEYINT),
+                "-forced-idr", "1",
+                ...bFrameArgs,
+
                 "-pix_fmt", "yuv420p",
                 "-movflags", "+faststart",
                 OUTPUT
@@ -376,6 +393,13 @@ function wcwidthGrapheme(g, emojiWidths) {
                 "-c:v", "libx264",
                 "-preset", PRESET,
                 "-crf", String(CRF),
+
+                // Fixed, short GOP for fast browser seeking.
+                "-g", String(KEYINT),
+                "-keyint_min", String(KEYINT),
+                "-sc_threshold", "0",
+                "-bf", String(BFRAMES),
+
                 "-pix_fmt", "yuv420p",
                 "-movflags", "+faststart",
                 OUTPUT
@@ -435,7 +459,7 @@ function wcwidthGrapheme(g, emojiWidths) {
         ff.stdin.end();
         ff.on("close", (code) => {
             if (code === 0) {
-                console.log(`Wrote ${OUTPUT} at ${OUT_FPS} fps (rendered ${frames.length} frames @ ${IN_FPS}). Size: ${W}x${H}`);
+                console.log(`Wrote ${OUTPUT} at ${OUT_FPS} fps (rendered ${frames.length} frames @ ${IN_FPS}). Size: ${W}x${H}. Keyint: ${KEYINT}, B-frames: ${BFRAMES}`);
             } else {
                 console.error("ffmpeg exited with code", code);
                 process.exit(code || 1);
