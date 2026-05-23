@@ -1,7 +1,6 @@
 #!/usr/bin/env ruby
 
 require "json"
-require "json/streamer"
 require "open3"
 require "shellwords"
 require "zlib"
@@ -21,17 +20,11 @@ USAGE = <<~TEXT
     # Write MP4 only, using the default output path and default renderer options:
     ruby #{SCRIPT_NAME} input.json.gz
 
-    # Write MP4 and extract stdin entries:
-    ruby #{SCRIPT_NAME} input.json.gz --stdin
-
-    # Extract stdin entries only:
-    ruby #{SCRIPT_NAME} input.json.gz --no-mp4 --stdin
-
     # Override renderer defaults:
     ruby #{SCRIPT_NAME} input.json.gz --fontsize 24 --encoder nvenc
 
-    # Use explicit output paths:
-    ruby #{SCRIPT_NAME} input.json.gz --mp4-path out.mp4 --stdin-path stdin.json.gz --stdin
+    # Use explicit output path:
+    ruby #{SCRIPT_NAME} input.json.gz --mp4-path out.mp4
 
     # Use an explicit renderer script:
     ruby #{SCRIPT_NAME} input.json.gz --renderer ./ansi_render_to_video.js --fontsize 16
@@ -47,20 +40,9 @@ USAGE = <<~TEXT
     --no-mp4, --no-write-mp4
         Do not write the MP4 file.
 
-    --stdin, --write-stdin
-        Extract stdin entries to a compressed JSON file.
-        Off by default.
-
-    --no-stdin, --no-write-stdin
-        Do not extract stdin entries.
-
     --mp4-path PATH
         Override the MP4 output path.
         Default: input.mp4
-
-    --stdin-path PATH
-        Override the stdin JSON.GZ output path.
-        Default: input-stdin.json.gz
 
     --renderer PATH
         Path to ansi_render_to_video.js.
@@ -107,10 +89,8 @@ def parse_args(argv)
   config = {
     in_path: nil,
     mp4_path: nil,
-    stdin_path: nil,
     renderer_path: default_renderer_path,
     write_mp4: true,
-    write_stdin: false,
     renderer_args: []
   }
 
@@ -134,25 +114,12 @@ def parse_args(argv)
     when "--no-mp4", "--no-write-mp4"
       config[:write_mp4] = false
 
-    when "--stdin", "--write-stdin"
-      config[:write_stdin] = true
-
-    when "--no-stdin", "--no-write-stdin"
-      config[:write_stdin] = false
-
     when "--mp4-path"
       config[:mp4_path] = take_value!(argv, i, arg)
       i += 1
 
     when /\A--mp4-path=(.+)\z/
       config[:mp4_path] = Regexp.last_match(1)
-
-    when "--stdin-path"
-      config[:stdin_path] = take_value!(argv, i, arg)
-      i += 1
-
-    when /\A--stdin-path=(.+)\z/
-      config[:stdin_path] = Regexp.last_match(1)
 
     when "--renderer"
       config[:renderer_path] = take_value!(argv, i, arg)
@@ -186,10 +153,9 @@ def parse_args(argv)
   end
 
   config[:mp4_path] ||= default_output_path(config[:in_path], ".mp4")
-  config[:stdin_path] ||= default_output_path(config[:in_path], "-stdin.json.gz")
 
-  unless config[:write_mp4] || config[:write_stdin]
-    abort "Nothing to do: both MP4 writing and stdin extraction are disabled."
+  unless config[:write_mp4]
+    abort "Nothing to do: MP4 writing is disabled."
   end
 
   config
@@ -197,41 +163,6 @@ end
 
 def shell_join(args)
   args.map(&:to_s).shelljoin
-end
-
-def extract_stdin_entries(in_path, stdin_path)
-  count = 0
-
-  STDERR.puts "Extracting stdin entries:"
-  STDERR.puts "  input:  #{in_path}"
-  STDERR.puts "  output: #{stdin_path}"
-
-  Zlib::GzipReader.open(in_path) do |input|
-    streamer = Json::Streamer.parser(
-      file_io: input,
-      chunk_size: 1024 * 1024
-    )
-
-    Zlib::GzipWriter.open(stdin_path) do |output|
-      output.write("[\n")
-      first = true
-
-      streamer.get(key: "stdin") do |stdin_entry|
-        output.write(",\n") unless first
-        output.write(JSON.generate(stdin_entry))
-
-        first = false
-        count += 1
-
-        STDERR.print "\rExtracted #{count} stdin entries..."
-      end
-
-      output.write("\n]\n")
-    end
-  end
-
-  STDERR.puts "\nDone extracting #{count} stdin entries."
-  count
 end
 
 def render_mp4(in_path, mp4_path, renderer_path, renderer_args)
@@ -300,12 +231,5 @@ if config[:write_mp4]
     config[:mp4_path],
     config[:renderer_path],
     config[:renderer_args]
-  )
-end
-
-if config[:write_stdin]
-  extract_stdin_entries(
-    config[:in_path],
-    config[:stdin_path]
   )
 end
