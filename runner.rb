@@ -2747,16 +2747,12 @@ class Runner
                                     dk = OpenSSL::PKCS5.pbkdf2_hmac("#{@seed}/bot/#{i}", "scrim:v1:#{@seed}", 200_000, 4, "sha256")
                                     bot_seed = dk.unpack1("L<")
                                     data[:config][:bot_seed] = bot_seed
-                                    # data[:config][:team] = bot[:team]
                                     data[:config][:slot] = bot[:slot]
                                     data[:config][:team_count] = @team_count
                                     data[:config][:slots_per_team] = @slots_per_team
                                     data[:config][:comm_bytes] = @comm_bytes
                                 end
                                 data[:tick] = @tick
-                                data[:team] = bot[:team]
-                                data[:slot] = bot[:slot]
-                                data[:slots_per_team] = @slots_per_team
                                 data[:team_buffer] = @team_buffers[bot[:team]].dup if @comm_bytes > 0
                                 data[:bot] = bot[:position]
                                 data[:wall] = []
