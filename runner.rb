@@ -244,6 +244,7 @@ class Runner
         @write_highlights = write_highlights
         @write_stdin = write_stdin
         @ansi_log = []
+        @stdin_log = []
         @show_timings = show_timings
         @paused = false
         @pause_requested = false
@@ -2543,6 +2544,7 @@ class Runner
                 Array.new([@slots_per_team, 1].max, 0.0)
             end
         end
+        @stdin_log = []
 
         antenna_stock = @bots.map { |b| @max_antennas }
         placed_antennas = @bots.map { |b| [] }
@@ -2688,6 +2690,7 @@ class Runner
                                 end
                             end
                             @ansi_log << log_entry
+                            @stdin_log << {} if @write_stdin
                         end
                     else
                         frames << nil
@@ -2885,6 +2888,14 @@ class Runner
                                 # stdin payloads for this frame/tick.
                                 @ansi_log.last[:stdin] ||= []
                                 @ansi_log.last[:stdin][i] = data
+
+                                # Keep a second frame-aligned stdin-only log with the same
+                                # structure as the regular ANSI log, but without the large screen
+                                # strings. This makes it possible to replay / inspect bot input
+                                # without scanning huge screen entries.
+                                @stdin_log.last ||= {}
+                                @stdin_log.last[:stdin] ||= []
+                                @stdin_log.last[:stdin][i] = data
                             end
                         end
 
@@ -3307,6 +3318,13 @@ class Runner
                 end
                 f.write(data.to_json)
             end
+            if @write_stdin
+                stdin_path = path.sub(/\.json\.gz\z/, '-stdin.json.gz')
+                Zlib::GzipWriter.open(stdin_path) do |f|
+                    data = {:width => @terminal_width, :height => @terminal_height, :frames => @stdin_log, :emoji_widths => emoji_widths}
+                    f.write(data.to_json)
+                end
+            end
             path = @ansi_log_path.sub('.json.gz', "-#{@seed.to_s(36)}-poster.json.gz")
             Zlib::GzipWriter.open(path) do |f|
                 data = {:width => @terminal_width, :height => @terminal_height, :frames => [@ansi_log.first], :emoji_widths => emoji_widths}
@@ -3564,7 +3582,7 @@ OptionParser.new do |opts|
     opts.on("--[no-]write-highlights", "Write highlight overlays to ANSI log (default: #{options[:write_highlights]})") do |x|
         options[:write_highlights] = x
     end
-    opts.on("--[no-]write-stdin", "Write bot stdin data to ANSI log (default: #{options[:write_stdin]})") do |x|
+    opts.on("--[no-]write-stdin", "Write bot stdin data to ANSI log and a dedicated stdin log (default: #{options[:write_stdin]})") do |x|
         options[:write_stdin] = x
     end
     opts.on("--[no-]show-timings", "Show timings after run (default: #{options[:show_timings]})") do |x|
