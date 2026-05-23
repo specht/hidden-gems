@@ -40,7 +40,7 @@ OPTIONS_FOR_BOT = %w(stage_key width height generator max_ticks emit_signals
                      gem_ttl swarm_gem_ttl max_antennas max_portals signal_radius
                      signal_cutoff signal_noise signal_quantization
                      signal_fade enable_debug timeout_scale
-                     instances_per_team comm_bytes swarm_gems
+                     slots_per_team comm_bytes swarm_gems
                      swarm_gem_chance swarm_node_count swarm_required_nodes
                      swarm_node_distance swarm_score_two_nodes
                      swarm_score_three_nodes)
@@ -192,7 +192,7 @@ class Runner
                    ansi_log_path:, write_highlights:, write_stdin:,
                    show_timings:, start_paused:, contest_mode:,
                    highlight_color:, enable_debug:, timeout_scale:,
-                   instances_per_team:, comm_bytes:,
+                   slots_per_team:, comm_bytes:,
                    swarm_gems: false, swarm_gem_chance: 0.0,
                    swarm_gem_ttl: nil,
                    swarm_node_count: 3, swarm_required_nodes: 2,
@@ -253,7 +253,7 @@ class Runner
         @enable_debug = enable_debug
         @timeout_scale = timeout_scale
         @team_count = 1
-        @instances_per_team = [instances_per_team.to_i, 1].max
+        @slots_per_team = [slots_per_team.to_i, 1].max
         @comm_bytes = [comm_bytes.to_i, 0].max
         @swarm_gems = !!swarm_gems
         @swarm_gem_chance = swarm_gem_chance
@@ -739,7 +739,7 @@ class Runner
             end
             @rng.shuffle!(@floor_tiles)
             @floor_tiles_set = Set.new(@floor_tiles)
-            spawn_count = @team_count * @instances_per_team
+            spawn_count = @team_count * @slots_per_team
             if @floor_tiles.size < spawn_count
                 raise "Not enough floor tiles for #{spawn_count} bot spawn points"
             end
@@ -1071,12 +1071,12 @@ class Runner
         total_weight = 0.0
         max_level = 0.0
 
-        levels.each_with_index do |level, instance_index|
+        levels.each_with_index do |level, slot_index|
             level = [[level.to_f, 0.0].max, 1.0].min
             next if level <= 0.001
 
             max_level = [max_level, level].max
-            color = rgb_from_hex(COMM_HIGHLIGHT_COLORS[instance_index % COMM_HIGHLIGHT_COLORS.size])
+            color = rgb_from_hex(COMM_HIGHLIGHT_COLORS[slot_index % COMM_HIGHLIGHT_COLORS.size])
 
             3.times do |i|
                 rgb[i] += color[i] * level
@@ -1113,13 +1113,13 @@ class Runner
         end
     end
 
-    def mark_comm_byte_changed(team_index, byte_index, instance_index)
+    def mark_comm_byte_changed(team_index, byte_index, slot_index)
         return unless @comm_bytes > 0
         return if team_index.nil? || byte_index.nil?
 
         @team_buffer_highlights ||= Array.new(@team_count) do
             Array.new(@comm_bytes) do
-                Array.new([@instances_per_team, 1].max, 0.0)
+                Array.new([@slots_per_team, 1].max, 0.0)
             end
         end
 
@@ -1129,8 +1129,86 @@ class Runner
         byte_highlights = team_highlights[byte_index]
         return unless byte_highlights
 
-        slot = instance_index.to_i % byte_highlights.size
+        slot = slot_index.to_i % byte_highlights.size
         byte_highlights[slot] = 1.0
+    end
+
+    def antenna_offsets_for_render(placed_antennas)
+        offsets = Set.new
+
+        placed_antennas.each do |antennas_for_bot|
+            antennas_for_bot.each do |offset|
+                offsets << offset
+            end
+        end
+
+        offsets
+    end
+
+    def build_signal_render_overlay(signal_level, antenna_offsets)
+        return nil unless @emit_signals
+        return nil if signal_level.nil? || signal_level.empty?
+
+        # Rendering used to check every gem for every screen tile:
+        #
+        #   width * height * gem_count
+        #
+        # With many gems most of those checks are misses. Instead, walk the
+        # already sparse signal hashes once and build an affine overlay per
+        # affected tile. Applying it later is O(1) per tile.
+        overlay = {}
+
+        signal_level.each_with_index do |levels, gem_index|
+            next if levels.nil? || levels.empty?
+
+            gem = @gems[gem_index]
+            next unless gem
+
+            color = rgb_from_hex(gem_color(gem))
+
+            levels.each do |offset, level|
+                # Keep the old rendering behavior: signals do not tint walls,
+                # except if an antenna occupies that wall tile.
+                next if @maze.include?(offset) && !antenna_offsets.include?(offset)
+
+                level = level.to_f
+                next if level <= 0.0
+                level = 1.0 if level > 1.0
+
+                keep = 1.0 - level
+                entry = overlay[offset]
+
+                if entry
+                    entry[0] *= keep
+                    entry[1] = entry[1] * keep + color[0] * level
+                    entry[2] = entry[2] * keep + color[1] * level
+                    entry[3] = entry[3] * keep + color[2] * level
+                else
+                    overlay[offset] = [
+                        keep,
+                        color[0] * level,
+                        color[1] * level,
+                        color[2] * level
+                    ]
+                end
+            end
+        end
+
+        overlay.empty? ? nil : overlay
+    end
+
+    def apply_signal_render_overlay(bg, overlay_entry)
+        return bg unless overlay_entry
+
+        base = rgb_from_hex(bg)
+        keep = overlay_entry[0]
+
+        format(
+            "#%02X%02X%02X",
+            (base[0] * keep + overlay_entry[1]).round.clamp(0, 255),
+            (base[1] * keep + overlay_entry[2]).round.clamp(0, 255),
+            (base[2] * keep + overlay_entry[3]).round.clamp(0, 255)
+        )
     end
 
     def spawn_swarm_shockwave(position)
@@ -1369,7 +1447,7 @@ class Runner
     end
 
     def score_summary
-        if @instances_per_team > 1
+        if @slots_per_team > 1
             (0...@team_count).map { |team| "#{team_label(team)} #{team_score(team)}" }.join(' : ')
         else
             @bots.map { |bot| "#{bot[:emoji]} #{bot[:disqualified_for] ? 0 : bot[:score]}" }.join(' : ')
@@ -1455,9 +1533,9 @@ class Runner
     end
 
     def bot_batches_for_tick(tick)
-        if @instances_per_team > 1
+        if @slots_per_team > 1
             team_order = team_order_for_tick(tick)
-            (0...@instances_per_team).map do |slot|
+            (0...@slots_per_team).map do |slot|
                 team_order.map { |team| @bot_index_by_team_slot[[team, slot]] }.compact
             end
         else
@@ -1485,7 +1563,7 @@ class Runner
 
         bot = @bots[bot_index]
         team = bot[:team]
-        instance_index = bot[:slot] || 0
+        slot_index = bot[:slot] || 0
         buffer = @team_buffers[team]
         return unless buffer
 
@@ -1495,7 +1573,7 @@ class Runner
                 next if buffer[index] == new_byte
 
                 buffer[index] = new_byte
-                mark_comm_byte_changed(team, index, instance_index)
+                mark_comm_byte_changed(team, index, slot_index)
             end
         end
 
@@ -1512,7 +1590,7 @@ class Runner
                 next if buffer[index] == new_byte
 
                 buffer[index] = new_byte
-                mark_comm_byte_changed(team, index, instance_index)
+                mark_comm_byte_changed(team, index, slot_index)
             end
         end
     end
@@ -1722,7 +1800,7 @@ class Runner
                 bot[:score] += points
                 ticks_to_first_capture_by_team[bot[:team]] ||= @tick
 
-                scorer = @instances_per_team > 1 ? team_label(bot[:team], with_name: true) : "#{bot[:name]} #{bot[:emoji]}"
+                scorer = @slots_per_team > 1 ? team_label(bot[:team], with_name: true) : "#{bot[:name]} #{bot[:emoji]}"
                 if @announcer_enabled
                     if swarm_gem?(gem)
                         node_text = "#{occupied_nodes}/#{@swarm_node_count} resonance nodes"
@@ -1817,7 +1895,7 @@ class Runner
         comments = COMMENT_SINGLE.dup
         @rng.shuffle!(comments)
 
-        if @instances_per_team > 1
+        if @slots_per_team > 1
             if @team_count == 1
                 @chatlog << {emoji: ANNOUNCER_EMOJI, text: "All eyes on our lone squad:" }
             elsif @team_count == 2
@@ -1829,7 +1907,7 @@ class Runner
             (0...@team_count).each do |team|
                 @chatlog << {
                     emoji: ANNOUNCER_EMOJI,
-                    text: "#{team_label(team, with_name: true)} deploys #{@instances_per_team} bot instances -- #{comments.shift}"
+                    text: "#{team_label(team, with_name: true)} deploys #{@slots_per_team} bot slots -- #{comments.shift}"
                 }
             end
         else
@@ -1912,6 +1990,9 @@ class Runner
                 end
             end
 
+            antenna_offsets = antenna_offsets_for_render(placed_antennas)
+            signal_render_overlay = build_signal_render_overlay(signal_level, antenna_offsets)
+
             swarm_node_override = {}
             @gems.each_with_index do |gem, gem_index|
                 next unless swarm_gem?(gem)
@@ -1959,7 +2040,7 @@ class Runner
                         c = ' ' * @tile_width
                         bg = FLOOR_COLOR
                         offset = (y << 16) | x
-                        have_antenna = placed_antennas.any? { |x| x.include?(offset) }
+                        have_antenna = antenna_offsets.include?(offset)
                         if @maze.include?(offset) && !have_antenna
                             unless @wall_color_cache.include?(offset)
                                 @wall_color_cache[offset] = mix_rgb_hex(WALL_COLOR, '#000000', paint_rng.next_float() * 0.25)
@@ -1985,19 +2066,7 @@ class Runner
                                     c += ' '
                                 end
                             end
-                            if @emit_signals
-                                @gems.each.with_index do |p, i|
-                                    if signal_level[i].include?((y << 16) | x)
-                                        unless @maze.include?((y << 16) | x) && !have_antenna
-                                            level = signal_level[i][(y << 16) | x]
-                                            # clamp signal level for rendering
-                                            level = 0.0 if level < 0.0
-                                            level = 1.0 if level > 1.0
-                                            bg = mix_rgb_hex(gem_color(p), bg, 1.0 - level)
-                                        end
-                                    end
-                                end
-                            end
+                            bg = apply_signal_render_overlay(bg, signal_render_overlay[offset]) if signal_render_overlay
                         end
                         $timings.profile("find bots") do
                             if @bot_id_for_offset.include?(offset)
@@ -2211,11 +2280,11 @@ class Runner
     end
 
     def add_team(path, team_index, bot_args = [])
-        if File.basename(path) == "interactive" && @instances_per_team > 1
-            raise "Interactive mode only supports one instance per team"
+        if File.basename(path) == "interactive" && @slots_per_team > 1
+            raise "Interactive mode only supports one slot per team"
         end
 
-        (0...@instances_per_team).each do |slot|
+        (0...@slots_per_team).each do |slot|
             add_bot(path, bot_args, team: team_index, slot: slot)
         end
     end
@@ -2471,7 +2540,7 @@ class Runner
         @team_buffers = Array.new(@team_count) { Array.new(@comm_bytes, 0) }
         @team_buffer_highlights = Array.new(@team_count) do
             Array.new(@comm_bytes) do
-                Array.new([@instances_per_team, 1].max, 0.0)
+                Array.new([@slots_per_team, 1].max, 0.0)
             end
         end
 
@@ -2645,7 +2714,7 @@ class Runner
                     # Normal stages keep the old model: all bots receive the same
                     # start-of-tick snapshot and responses are resolved by initiative.
                     #
-                    # Multi-instance team stages are split into slot batches:
+                    # Multi-slot team stages are split into slot batches:
                     #   A0/B0, then A1/B1, then A2/B2, ...
                     # Bots in one batch receive the same world snapshot. After the
                     # batch is resolved, later slots see the updated world and the
@@ -2676,16 +2745,15 @@ class Runner
                                     bot_seed = dk.unpack1("L<")
                                     data[:config][:bot_seed] = bot_seed
                                     # data[:config][:team] = bot[:team]
-                                    data[:config][:instance] = bot[:slot]
+                                    data[:config][:slot] = bot[:slot]
                                     data[:config][:team_count] = @team_count
-                                    data[:config][:instances_per_team] = @instances_per_team
+                                    data[:config][:slots_per_team] = @slots_per_team
                                     data[:config][:comm_bytes] = @comm_bytes
                                 end
                                 data[:tick] = @tick
                                 data[:team] = bot[:team]
                                 data[:slot] = bot[:slot]
-                                data[:team_size] = @instances_per_team
-                                data[:phase] = bot[:slot]
+                                data[:slots_per_team] = @slots_per_team
                                 data[:team_buffer] = @team_buffers[bot[:team]].dup if @comm_bytes > 0
                                 data[:bot] = bot[:position]
                                 data[:wall] = []
@@ -2725,8 +2793,10 @@ class Runner
                                             end
                                         end
                                     end
-                                    @gems.each do |gem|
-                                        if gem[:position_offset] == t
+                                    gem_index = @gem_id_for_offset[t]
+                                    if gem_index
+                                        gem = @gems[gem_index]
+                                        if gem
                                             entry = { :position => gem[:position], :ttl => gem[:ttl] }
                                             if swarm_gem?(gem)
                                                 entry[:type] = 'swarm'
@@ -2795,7 +2865,7 @@ class Runner
                                                 :teammate => (other[:team] == bot[:team])
                                             }
                                             if entry[:teammate]
-                                                entry[:instance] = other[:slot]
+                                                entry[:slot] = other[:slot]
                                             end
                                             data[:visible_bots] << entry
                                         end
@@ -3290,7 +3360,7 @@ options = {
     highlight_color: '#ffffff',
     enable_debug: true,
     timeout_scale: 1.0,
-    instances_per_team: 1,
+    slots_per_team: 1,
     comm_bytes: 0,
     swarm_gems: false,
     swarm_gem_chance: 0.0,
@@ -3346,6 +3416,8 @@ OptionParser.new do |opts|
         stage_title = stage['title']
         stage.each_pair do |_key, value|
             key = _key.to_sym
+            # Backwards compatibility for older stages.yaml files.
+            # New stage configs should use slots_per_team.
             next if key == :title || key == :from
             if value.is_a?(Integer) || value.is_a?(Float) || value.is_a?(String)
                 options[key] = value
@@ -3389,8 +3461,8 @@ OptionParser.new do |opts|
     opts.on("--max-portals N", Integer, "Max. number of portals per bot (default: #{options[:max_portals]})") do |x|
         options[:max_portals] = x
     end
-    opts.on("--instances-per-team N", Integer, "Number of spawned copies per submitted bot (default: #{options[:instances_per_team]})") do |x|
-        options[:instances_per_team] = [x, 1].max
+    opts.on("--slots-per-team N", Integer, "Number of bot slots per team (default: #{options[:slots_per_team]})") do |x|
+        options[:slots_per_team] = [x, 1].max
     end
     opts.on("--comm-bytes N", Integer, "Team communication buffer size in bytes (default: #{options[:comm_bytes]})") do |x|
         options[:comm_bytes] = [x, 0].max

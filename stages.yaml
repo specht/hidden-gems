@@ -143,7 +143,7 @@ stage-6@0.1:
     gem_ttl: 360
     swarm_gem_ttl: 600
     max_ticks: 2000
-    instances_per_team: 4
+    slots_per_team: 4
     comm_bytes: 32
     swarm_gems: true
     swarm_gem_chance: 0.2
