@@ -200,7 +200,7 @@ quit_at_end = false
 
 opt_parser = OptionParser.new do |opts|
     opts.banner = <<~BANNER
-    Usage: ./ansi_player.rb [options] recording.json.gz"
+    Usage: ./ansi_player.rb [options] recording.json.gz
     BANNER
 
     opts.on("--fps=N", Float, "Max frames/second (default: #{fps})") do |x|
