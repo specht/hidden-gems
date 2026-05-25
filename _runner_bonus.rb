@@ -318,7 +318,7 @@ class Runner
         run_generator = lambda do |width, height, generator, seed|
             command = [
                 "node",
-                Shellwords.escape(maze_script),
+                "\"#{Shellwords.escape(maze_script)}\"",
                 "--width", width.to_s,
                 "--height", height.to_s,
                 "--generator", Shellwords.escape(generator.to_s),
