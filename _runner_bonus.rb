@@ -323,12 +323,14 @@ class Runner
                 "--height", height.to_s,
                 "--generator", Shellwords.escape(generator.to_s),
                 "--seed", Shellwords.escape(seed.to_s),
-                "--wall #",
+                "--wall x",
                 "--floor .",
             ].join(" ")
 
+            STDERR.puts command
+
             `#{command}`.strip.split("\n").map(&:strip).select do |line|
-                line =~ /^[\.#]+$/
+                line =~ /^[\.x]+$/
             end
         end
 
@@ -479,8 +481,8 @@ class Runner
 
             # Stitch the parts together with two separator walls.
             inner = inner_height.times.map do |y|
-                left_sep = door_rows.include?(y) ? '.' : '#'
-                right_sep = door_rows.include?(y) ? '.' : '#'
+                left_sep = door_rows.include?(y) ? '.' : 'x'
+                right_sep = door_rows.include?(y) ? '.' : 'x'
 
                 left_part[y].join + left_sep + eller_part[y].join + right_sep + right_part[y].join
             end
