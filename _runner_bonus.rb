@@ -323,8 +323,8 @@ class Runner
                 "--height", height.to_s,
                 "--generator", Shellwords.escape(generator.to_s),
                 "--seed", Shellwords.escape(seed.to_s),
-                "--wall", Shellwords.escape("#"),
-                "--floor", Shellwords.escape(".")
+                "--wall #",
+                "--floor .",
             ].join(" ")
 
             `#{command}`.strip.split("\n").map(&:strip).select do |line|
