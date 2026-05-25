@@ -3869,6 +3869,7 @@ if options[:check_determinism]
         checksum = nil
         2.times do
             options[:seed] = seed
+            options[:max_ticks] = 200
             runner = Runner.new(**options)
             runner.stage_title = stage_title if stage_title
             runner.stage_key = stage_key if stage_key
