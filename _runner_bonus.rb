@@ -728,6 +728,7 @@ class Runner
         $timings.profile("setup") do
             @rng = PCG32.new(@seed)
             @maze = gen_maze()
+            setup_static_render_grid()
             @floor_tiles = []
             @checksum = Digest::SHA256.hexdigest(@maze.to_a.sort.to_json)
             (0...@height).each do |y|
@@ -1151,13 +1152,6 @@ class Runner
         return nil unless @emit_signals
         return nil if signal_level.nil? || signal_level.empty?
 
-        # Rendering used to check every gem for every screen tile:
-        #
-        #   width * height * gem_count
-        #
-        # With many gems most of those checks are misses. Instead, walk the
-        # already sparse signal hashes once and build an affine overlay per
-        # affected tile. Applying it later is O(1) per tile.
         overlay = {}
 
         signal_level.each_with_index do |levels, gem_index|
@@ -1169,8 +1163,7 @@ class Runner
             color = rgb_from_hex(gem_color(gem))
 
             levels.each do |offset, level|
-                # Keep the old rendering behavior: signals do not tint walls,
-                # except if an antenna occupies that wall tile.
+                # Signals do not tint walls, except if an antenna occupies that wall tile.
                 next if @maze.include?(offset) && !antenna_offsets.include?(offset)
 
                 level = level.to_f
@@ -1196,7 +1189,22 @@ class Runner
             end
         end
 
-        overlay.empty? ? nil : overlay
+        return nil if overlay.empty?
+
+        base = rgb_from_hex(FLOOR_COLOR)
+
+        overlay.transform_values! do |entry|
+            keep = entry[0]
+
+            format(
+                "#%02X%02X%02X",
+                (base[0] * keep + entry[1]).round.clamp(0, 255),
+                (base[1] * keep + entry[2]).round.clamp(0, 255),
+                (base[2] * keep + entry[3]).round.clamp(0, 255)
+            )
+        end
+
+        overlay
     end
 
     def apply_signal_render_overlay(bg, overlay_entry)
@@ -1256,6 +1264,87 @@ class Runner
         # Smooth triangular falloff: strong at the ring center, soft at the edge.
         edge = 1.0 - (delta / thickness)
         edge * edge * opacity
+    end
+
+    def add_ring_to_arena_effect_overlay(overlay, center, radius, thickness, opacity)
+        return if opacity <= 0.001
+        return if radius < 0.0
+
+        cx = center[0]
+        cy = center[1]
+
+        outer = radius + thickness
+        inner = [radius - thickness, 0.0].max
+
+        x_min = [(cx - outer).floor, 0].max
+        x_max = [(cx + outer).ceil, @width - 1].min
+        y_min = [(cy - outer).floor, 0].max
+        y_max = [(cy + outer).ceil, @height - 1].min
+
+        inner2 = inner * inner
+        outer2 = outer * outer
+
+        (y_min..y_max).each do |y|
+            dy = y.to_f - cy
+            dy2 = dy * dy
+
+            (x_min..x_max).each do |x|
+                dx = x.to_f - cx
+                d2 = dx * dx + dy2
+
+                # Cheap reject before the expensive sqrt.
+                next if d2 < inner2 || d2 > outer2
+
+                distance = Math.sqrt(d2)
+                level = ring_intensity(distance, radius, thickness, opacity)
+                next if level <= 0.001
+
+                offset = (y << 16) | x
+                old = overlay[offset] || 0.0
+                overlay[offset] = level if level > old
+            end
+        end
+    end
+
+    def build_arena_effect_overlay(tick)
+        return nil unless @arena_effects && !@arena_effects.empty?
+
+        overlay = {}
+
+        @arena_effects.each do |effect|
+            next unless effect[:type] == :swarm_shockwave
+
+            age = tick - effect[:start_tick]
+            next if age < 0 || age > effect[:duration]
+
+            progress = age.to_f / effect[:duration].to_f
+            fade = 1.0 - progress
+            next if fade <= 0.001
+
+            center = effect[:center]
+            radius = effect[:max_radius].to_f * progress
+
+            add_ring_to_arena_effect_overlay(
+                overlay,
+                center,
+                radius,
+                SWARM_SHOCKWAVE_THICKNESS,
+                SWARM_SHOCKWAVE_OPACITY * fade
+            )
+
+            trail_radius = radius - SWARM_SHOCKWAVE_TRAIL_DISTANCE
+            if trail_radius > 0.0
+                add_ring_to_arena_effect_overlay(
+                    overlay,
+                    center,
+                    trail_radius,
+                    SWARM_SHOCKWAVE_THICKNESS * 1.35,
+                    SWARM_SHOCKWAVE_TRAIL_OPACITY * fade
+                )
+            end
+        end
+
+        overlay.empty? ? nil : overlay
     end
 
     def apply_arena_effects_to_bg(bg, x, y, tick)
@@ -1929,6 +2018,101 @@ class Runner
         end
     end
 
+    def setup_static_render_grid
+        @render_offsets_by_row = []
+        @render_wall_by_row = []
+        @render_wall_bg_by_row = []
+
+        paint_rng = PCG32.new(1234)
+
+        (0...@height).each do |y|
+            offset_row = []
+            wall_row = []
+            wall_bg_row = []
+
+            (0...@width).each do |x|
+                offset = (y << 16) | x
+                is_wall = @maze.include?(offset)
+
+                offset_row << offset
+                wall_row << is_wall
+
+                if is_wall
+                    wall_bg_row << mix_rgb_hex(WALL_COLOR, '#000000', paint_rng.next_float * 0.25)
+                else
+                    wall_bg_row << FLOOR_COLOR
+                end
+            end
+
+            @render_offsets_by_row << offset_row
+            @render_wall_by_row << wall_row
+            @render_wall_bg_by_row << wall_bg_row
+        end
+    end
+
+    def fogged_bg(bg, offset, highlight_color, paused)
+        @fog_black_cache ||= {}
+        @fog_mul_cache ||= {}
+        @fog_mix_cache ||= {}
+        @bg_fade ||= {}
+        @bg_highlight ||= {}
+
+        if highlight_color
+            @bg_highlight[offset] = highlight_color
+            fade = 1.0
+        else
+            fade = (@bg_fade[offset] || 0.0) * (paused ? 0.0 : 0.5)
+            fade = 0.0 if fade < (1.0 / 128.0)
+        end
+
+        @bg_fade[offset] = fade
+
+        last_highlight = @bg_highlight[offset] || '#ffffff'
+
+        dark_bg = @fog_black_cache[bg]
+        unless dark_bg
+            dark_bg = mix_rgb_hex(bg, '#000000', 0.5)
+            @fog_black_cache[bg] = dark_bg
+        end
+
+        lit_by_highlight_cache = @fog_mul_cache[bg]
+        unless lit_by_highlight_cache
+            lit_by_highlight_cache = {}
+            @fog_mul_cache[bg] = lit_by_highlight_cache
+        end
+
+        lit_bg = lit_by_highlight_cache[last_highlight]
+        unless lit_bg
+            lit_bg = mul_rgb_hex(bg, last_highlight)
+            lit_by_highlight_cache[last_highlight] = lit_bg
+        end
+
+        fade_bucket = (fade * 64).round
+
+        return dark_bg if fade_bucket <= 0
+        return lit_bg if fade_bucket >= 64
+
+        mix_cache_for_dark = @fog_mix_cache[dark_bg]
+        unless mix_cache_for_dark
+            mix_cache_for_dark = {}
+            @fog_mix_cache[dark_bg] = mix_cache_for_dark
+        end
+
+        mix_cache_for_lit = mix_cache_for_dark[lit_bg]
+        unless mix_cache_for_lit
+            mix_cache_for_lit = {}
+            mix_cache_for_dark[lit_bg] = mix_cache_for_lit
+        end
+
+        mixed = mix_cache_for_lit[fade_bucket]
+        unless mixed
+            mixed = mix_rgb_hex(dark_bg, lit_bg, fade_bucket / 64.0)
+            mix_cache_for_lit[fade_bucket] = mixed
+        end
+
+        mixed
+    end
+
     def render(tick, signal_level, paused, placed_antennas, placed_portals)
         prune_arena_effects(tick)
 
@@ -1964,10 +2148,20 @@ class Runner
                 io.puts status_line
             end
 
-            paint_rng = PCG32.new(1234)
+            visible_count_by_offset = Hash.new(0)
 
-            bots_visible = @bots.map do |bot|
-                @visibility[(bot[:position][1] << 16) | bot[:position][0]]
+            @bots.each do |bot|
+                next if bot[:disqualified_for]
+
+                bot_position = bot[:position]
+                bot_offset = (bot_position[1] << 16) | bot_position[0]
+                visible_offsets = @visibility[bot_offset]
+
+                next unless visible_offsets
+
+                visible_offsets.each do |visible_offset|
+                    visible_count_by_offset[visible_offset] += 1
+                end
             end
 
             chat_lines = nil
@@ -1976,10 +2170,11 @@ class Runner
             end
 
             bot_with_initiative = @tick % @bots.size
-            @wall_color_cache ||= {}
             @fog_of_war_cache ||= {}
             @bg_fade ||= {}
             @bg_highlight ||= {}
+            @paint_cell_cache ||= {}
+            @paint_cell_cache_size ||= 0
 
             bot_highlights = []
 
@@ -1994,6 +2189,7 @@ class Runner
 
             antenna_offsets = antenna_offsets_for_render(placed_antennas)
             signal_render_overlay = build_signal_render_overlay(signal_level, antenna_offsets)
+            arena_effect_overlay = build_arena_effect_overlay(tick)
 
             swarm_node_override = {}
             @gems.each_with_index do |gem, gem_index|
@@ -2038,47 +2234,51 @@ class Runner
 
             $timings.profile("render: main screen") do
                 (0...@height).each do |y|
+                    row = +""
+                    offset_row = @render_offsets_by_row[y]
+                    wall_row = @render_wall_by_row[y]
+                    wall_bg_row = @render_wall_bg_by_row[y]
+
                     (0...@width).each do |x|
                         c = ' ' * @tile_width
-                        bg = FLOOR_COLOR
-                        offset = (y << 16) | x
+                        offset = offset_row[x]
                         have_antenna = antenna_offsets.include?(offset)
-                        if @maze.include?(offset) && !have_antenna
-                            unless @wall_color_cache.include?(offset)
-                                @wall_color_cache[offset] = mix_rgb_hex(WALL_COLOR, '#000000', paint_rng.next_float() * 0.25)
+
+                        bg =
+                            if wall_row[x] && !have_antenna
+                                wall_bg_row[x]
+                            else
+                                FLOOR_COLOR
                             end
-                            bg = @wall_color_cache[offset]
-                        end
                         node_info = swarm_node_override[offset]
                         # if node_info && !(@maze.include?(offset) && !have_antenna)
                         #     node_mix = node_info[:occupied] ? 0.35 : 0.45
                         #     bg = mix_rgb_hex(SWARM_NODE_COLOR, bg, node_mix)
                         # end
-                        $timings.profile("find gems") do
-                            if @gem_id_for_offset.include?(offset)
-                                gem_index = @gem_id_for_offset[offset]
-                                gem = @gems[gem_index]
-                                c = gem_emoji(gem)
-                                while vwidth(c) < @tile_width
-                                    c += ' '
-                                end
-                            elsif node_info && !@bot_id_for_offset.include?(offset)
-                                c = SWARM_NODE_EMOJI
-                                while vwidth(c) < @tile_width
-                                    c += ' '
-                                end
+                        if (gem_index = @gem_id_for_offset[offset])
+                            gem = @gems[gem_index]
+                            c = gem_emoji(gem)
+                            while vwidth(c) < @tile_width
+                                c += ' '
                             end
-                            bg = apply_signal_render_overlay(bg, signal_render_overlay[offset]) if signal_render_overlay
+                        elsif node_info && !@bot_id_for_offset.include?(offset)
+                            c = SWARM_NODE_EMOJI
+                            while vwidth(c) < @tile_width
+                                c += ' '
+                            end
                         end
-                        $timings.profile("find bots") do
-                            if @bot_id_for_offset.include?(offset)
-                                bot_index = @bot_id_for_offset[offset]
-                                bot = @bots[bot_index]
-                                next if bot[:disqualified_for]
-                                c = bot[:emoji]
-                                while vwidth(c) < @tile_width
-                                    c += ' '
-                                end
+
+                        if signal_render_overlay
+                            signal_bg = signal_render_overlay[offset]
+                            bg = signal_bg if signal_bg
+                        end
+
+                        if (bot_index = @bot_id_for_offset[offset])
+                            bot = @bots[bot_index]
+                            next if bot[:disqualified_for]
+                            c = bot[:emoji]
+                            while vwidth(c) < @tile_width
+                                c += ' '
                             end
                         end
 
@@ -2094,37 +2294,19 @@ class Runner
                                 c += ' '
                             end
                         end
-                        highlight_color = nil
-                        (0...@bots.size).each do |_k|
-                            i = _k
-                            bot = @bots[i]
-                            next if bot[:disqualified_for]
-                            if (@visibility[(bot[:position][1] << 16) | bot[:position][0]] || Set.new()).include?((y << 16) | x)
-                                if @bots.size == 2
-                                    if highlight_color.nil?
-                                        highlight_color = @faded_highlight_color
-                                    else
-                                        highlight_color = @highlight_color
-                                    end
-                                else
-                                    highlight_color = @highlight_color
-                                end
+
+                        visible_count = visible_count_by_offset[offset]
+
+                        highlight_color =
+                            if visible_count <= 0
+                                nil
+                            elsif @bots.size == 2
+                                visible_count >= 2 ? @highlight_color : @faded_highlight_color
+                            else
+                                @highlight_color
                             end
-                        end
-                        @bg_highlight[offset] = highlight_color if highlight_color
-                        if highlight_color.nil?
-                            @bg_fade[offset] ||= 0.0
-                            @bg_fade[offset] *= paused ? 0 : 0.5
-                        else
-                            @bg_fade[offset] = 1.0
-                        end
-                        cache_key_0 = "#{bg}/#000000/32"
-                        @fog_of_war_cache[cache_key_0] ||= mix_rgb_hex(bg, '#000000', 0.5)
-                        cache_key_1 = "#{bg}/#{@bg_highlight[offset] || '#ffffff'}/m"
-                        @fog_of_war_cache[cache_key_1] ||= mul_rgb_hex(bg, @bg_highlight[offset] || '#ffffff')
-                        cache_key_2 = "#{@fog_of_war_cache[cache_key_0]}/#{@fog_of_war_cache[cache_key_1]}/#{(@bg_fade[offset] * 64).round}"
-                        @fog_of_war_cache[cache_key_2] ||= mix_rgb_hex(@fog_of_war_cache[cache_key_0], @fog_of_war_cache[cache_key_1], @bg_fade[offset])
-                        bg = @fog_of_war_cache[cache_key_2]
+
+                        bg = fogged_bg(bg, offset, highlight_color, paused)
                         old_bg = bg
                         (0...@bots.size).each do |_k|
                             if @ansi_log_path && @write_highlights
@@ -2150,17 +2332,41 @@ class Runner
                         if @ansi_log_path && @write_highlights
                             bg = old_bg
                         end
-                        bg = apply_arena_effects_to_bg(bg, x, y, tick)
-                        io.print Paint[c, nil, bg]
+                        if arena_effect_overlay
+                            opacity = arena_effect_overlay[offset]
+                            bg = mix_rgb_hex(bg, SWARM_GEM_COLOR, opacity) if opacity
+                        end
+
+                        char_cache = @paint_cell_cache[c]
+
+                        unless char_cache
+                            char_cache = {}
+                            @paint_cell_cache[c] = char_cache
+                        end
+
+                        painted_cell = char_cache[bg]
+
+                        unless painted_cell
+                            painted_cell = Paint[c, nil, bg]
+                            char_cache[bg] = painted_cell
+                            @paint_cell_cache_size += 1
+
+                            if @paint_cell_cache_size > 20_000
+                                @paint_cell_cache.clear
+                                @paint_cell_cache_size = 0
+                            end
+                        end
+
+                        row << painted_cell
                     end
                     if @enable_chatlog && @chatlog_position == :right
-                        io.print ' '
+                        row << ' '
                         s = chat_lines[y] || ''
                         s += ' ' * (@chatlog_width - vwidth(strip_ansi(s)))
 
-                        io.print s
+                        row << s
                     end
-                    io.puts
+                    io.puts row
                 end
             end
 
