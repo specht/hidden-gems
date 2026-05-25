@@ -327,8 +327,6 @@ class Runner
                 "--floor .",
             ].join(" ")
 
-            STDERR.puts command
-
             `#{command}`.strip.split("\n").map(&:strip).select do |line|
                 line =~ /^[\.x]+$/
             end
@@ -2662,12 +2660,12 @@ class Runner
                             screen = render(running_tick, signal_level, @paused, placed_antennas, placed_portals)
                         end
                         # @protocol.last[:screen] = screen
-                        if @verbose >= 2
-                            if @interactive_mode
-                                print "\033[2J\033[H"
-                            end
-                            print screen
-                        end
+                        # if @verbose >= 2
+                        #     if @interactive_mode
+                        #         print "\033[2J\033[H"
+                        #     end
+                        #     print screen
+                        # end
                         frames << screen
                         if @ansi_log_path
                             log_entry = {:screen => screen}
