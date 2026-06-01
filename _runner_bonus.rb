@@ -797,12 +797,47 @@ class Runner
 
             # pre-calculate gem spawns
             @gem_fel = []
+            sorted_floor_tiles = @floor_tiles_set.to_a.sort
             (0...@max_ticks).each do |t|
-                if @rng.next_float() < @gem_spawn_rate
-                    candidate_tiles = @floor_tiles_set.dup
-                    position_offset = @rng.sample(candidate_tiles.to_a.sort)
-                    @gem_fel << {:tick => t, :offset => position_offset}
+                next unless @rng.next_float() < @gem_spawn_rate
+
+                position_offset = @rng.sample(sorted_floor_tiles)
+                spawn_data = {
+                    :tick => t,
+                    :offset => position_offset,
+                    :kind => :regular,
+                    :adjust_directions => cardinal_directions_for_offset(position_offset)
+                }
+
+                if @swarm_gems && @swarm_node_count > 0 && @swarm_required_nodes > 0 && @rng.next_float < @swarm_gem_chance
+                    planned_gem = {
+                        :position_offset => position_offset,
+                        :position => offset_to_position(position_offset),
+                        :kind => :swarm
+                    }
+
+                    planned_nodes = []
+                    $timings.profile("setup: pre-calculate swarm nodes") do
+                        planned_nodes = place_swarm_nodes_for_gem(planned_gem, Set.new([position_offset]))
+                    end
+
+                    if planned_nodes.size == @swarm_node_count
+                        spawn_data[:kind] = :swarm
+                        spawn_data[:nodes] = planned_nodes.map do |node|
+                            {
+                                :offset => node[:offset],
+                                :position => node[:position],
+                                :relative => [
+                                    node[:position][0] - planned_gem[:position][0],
+                                    node[:position][1] - planned_gem[:position][1]
+                                ],
+                                :adjust_directions => cardinal_directions_for_offset(node[:offset])
+                            }
+                        end
+                    end
                 end
+
+                @gem_fel << spawn_data
             end
             # we're waiting to spawn the gem at @gem_fel_index
             @gem_fel_index = 0
@@ -1786,6 +1821,107 @@ class Runner
         occupied_points
     end
 
+    def offset_to_position(offset)
+        [offset & 0xFFFF, offset >> 16]
+    end
+
+    def xy_to_offset(x, y)
+        (y << 16) | x
+    end
+
+    def cardinal_directions_for_offset(offset)
+        directions = [[-1, 0], [1, 0], [0, -1], [0, 1]]
+        directions.each_with_index.sort_by do |direction, index|
+            dx, dy = direction
+            mixed = offset.to_i ^ ((dx + 2) * 0x9E3779B1) ^ ((dy + 2) * 0x85EBCA6B) ^ (index * 0xC2B2AE35)
+            [mixed & 0xFFFFFFFF, index]
+        end.map(&:first)
+    end
+
+    def find_nearest_free_floor_offset(start_offset, occupied_points, directions)
+        directions = [[-1, 0], [1, 0], [0, -1], [0, 1]] unless directions.is_a?(Array) && directions.any?
+
+        return start_offset if @floor_tiles_set.include?(start_offset) && !occupied_points.include?(start_offset)
+
+        sx, sy = offset_to_position(start_offset)
+        return nil if sx < 0 || sy < 0 || sx >= @width || sy >= @height
+
+        seen = Set.new([start_offset])
+        wavefront = [[sx, sy]]
+
+        until wavefront.empty?
+            new_wavefront = []
+
+            wavefront.each do |px, py|
+                directions.each do |d|
+                    nx = px + d[0].to_i
+                    ny = py + d[1].to_i
+                    next if nx < 0 || ny < 0 || nx >= @width || ny >= @height
+
+                    offset = xy_to_offset(nx, ny)
+                    next if seen.include?(offset)
+                    next if @maze.include?(offset)
+
+                    seen << offset
+                    return offset unless occupied_points.include?(offset)
+
+                    new_wavefront << [nx, ny]
+                end
+            end
+
+            wavefront = new_wavefront
+        end
+
+        nil
+    end
+
+    def planned_node_start_offset(planned_node, gem)
+        relative = planned_node[:relative]
+        if relative && relative.size >= 2
+            nx = gem[:position][0] + relative[0].to_i
+            ny = gem[:position][1] + relative[1].to_i
+            if nx >= 0 && ny >= 0 && nx < @width && ny < @height
+                translated_offset = xy_to_offset(nx, ny)
+                return translated_offset unless @maze.include?(translated_offset)
+            end
+        end
+
+        planned_node[:offset]
+    end
+
+    def fallback_swarm_nodes_for_spawn(spawn_data, gem)
+        (spawn_data[:nodes] || []).first(@swarm_node_count).map do |planned_node|
+            offset = planned_node_start_offset(planned_node, gem)
+            {
+                :position => offset_to_position(offset),
+                :offset => offset
+            }
+        end
+    end
+
+    def adjust_swarm_nodes_for_spawn(spawn_data, gem, occupied_points)
+        planned_nodes = spawn_data[:nodes] || []
+        return [] if planned_nodes.size < @swarm_node_count
+
+        node_occupied_points = occupied_points.dup
+        node_occupied_points << gem[:position_offset]
+        nodes = []
+
+        planned_nodes.first(@swarm_node_count).each do |planned_node|
+            start_offset = planned_node_start_offset(planned_node, gem)
+            offset = find_nearest_free_floor_offset(start_offset, node_occupied_points, planned_node[:adjust_directions])
+            return [] if offset.nil?
+
+            nodes << {
+                :position => offset_to_position(offset),
+                :offset => offset
+            }
+            node_occupied_points << offset
+        end
+
+        nodes
+    end
+
     def place_swarm_nodes_for_gem(gem, occupied_points)
         return [] unless @swarm_gems
         return [] if @swarm_node_count <= 0
@@ -2501,66 +2637,35 @@ class Runner
         spawn_data = @gem_fel[@gem_fel_index]
         @gem_fel_index += 1
 
-        gem = {:position_offset => spawn_data[:offset], :ttl => @gem_ttl, :initial_ttl => @gem_ttl, :kind => :regular}
-        gem[:position] = [gem[:position_offset] & 0xFFFF, gem[:position_offset] >> 16]
+        kind = (spawn_data[:kind] || :regular).to_sym
+        ttl = (kind == :swarm ? @swarm_gem_ttl : @gem_ttl)
+        gem = {:position_offset => spawn_data[:offset], :ttl => ttl, :initial_ttl => ttl, :kind => kind}
+        gem[:position] = offset_to_position(gem[:position_offset])
 
         # Attention: if there happens to be a gem, a swarm node, a bot, or an
         # antenna already at this position, let's find another position nearby.
         occupied_points = occupied_offsets_for_spawn(placed_antennas)
 
-        dist_field = {}
-        wavefront = Set.new()
-        wavefront << [gem[:position][0], gem[:position][1]]
-        dist_field[(gem[:position][1] << 16) | gem[:position][0]] = 0
-        distance = 0
-        good = false
         $timings.profile("spawn gem: find free tile") do
-            while (occupied_points.include?(gem[:position_offset])) && (!wavefront.empty?)
-                new_wavefront = Set.new()
-                wavefront.each do |p|
-                    px = p[0]
-                    py = p[1]
-                    candidates = [[-1, 0], [1, 0], [0, -1], [0, 1]]
-                    @rng.shuffle!(candidates)
-                    candidates.each do |d|
-                        dx = px + d[0]
-                        dy = py + d[1]
-                        if dx >= 0 && dy >= 0 && dx < @width && dy < @height
-                            offset = (dy << 16) | dx
-                            if !dist_field.include?(offset) && !@maze.include?(offset)
-                                dist_field[offset] = distance
-                                new_wavefront << [dx, dy]
-                                unless occupied_points.include?(offset)
-                                    gem[:position_offset] = offset
-                                    gem[:position] = [dx, dy]
-                                    good = true
-                                    break
-                                end
-                            end
-                        end
-                        break if good
-                    end
-                    break if good
-                end
-                break if good
-                wavefront = new_wavefront
-                distance += 1
+            adjusted_offset = find_nearest_free_floor_offset(
+                gem[:position_offset],
+                occupied_points,
+                spawn_data[:adjust_directions]
+            )
+            if adjusted_offset
+                gem[:position_offset] = adjusted_offset
+                gem[:position] = offset_to_position(adjusted_offset)
             end
         end
 
-        if @swarm_gems && @swarm_node_count > 0 && @swarm_required_nodes > 0 && @rng.next_float < @swarm_gem_chance
-            node_occupied_points = occupied_points.dup
-            node_occupied_points << gem[:position_offset]
+        if swarm_gem?(gem)
             nodes = []
-            $timings.profile("spawn gem: place swarm nodes") do
-                nodes = place_swarm_nodes_for_gem(gem, node_occupied_points)
+            $timings.profile("spawn gem: adjust swarm nodes") do
+                nodes = adjust_swarm_nodes_for_spawn(spawn_data, gem, occupied_points)
             end
-            if nodes.size == @swarm_node_count
-                gem[:kind] = :swarm
-                gem[:ttl] = @swarm_gem_ttl
-                gem[:initial_ttl] = @swarm_gem_ttl
-                gem[:nodes] = nodes
-            end
+
+            nodes = fallback_swarm_nodes_for_spawn(spawn_data, gem) if nodes.size < @swarm_node_count
+            gem[:nodes] = nodes
         end
 
         $timings.profile("spawn gem: precalculate signal level") do
